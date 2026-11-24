@@ -288,8 +288,143 @@ export function hasModulePermission(
   moduleKey: AdminModuleKey,
   action: PermissionAction
 ): boolean {
+  if (profile?.accountStatus === 'suspended') return false;
   if (role === 'admin') return true;
   const perms = getEffectivePermissions(role, profile);
   const actions = perms[moduleKey] || [];
   return actions.includes(action);
 }
+
+export const COMPANY_DEPARTMENTS = [
+  'Owner & Management',
+  'Administration',
+  'Human Resources',
+  'Sales',
+  'Accounts',
+  'Operations',
+  'IT & Development',
+] as const;
+
+export type CompanyDepartment = (typeof COMPANY_DEPARTMENTS)[number];
+
+export const DESIGNATION_LABELS: Record<
+  'director' | 'manager' | 'executive' | 'assistant',
+  string
+> = {
+  director: 'Owner / Director',
+  manager: 'Manager',
+  executive: 'Executive',
+  assistant: 'Assistant',
+};
+
+export function resolveRoleFromDepartment(
+  department: string,
+  designation: 'director' | 'manager' | 'executive' | 'assistant'
+): PersistedUserRole {
+  switch (department) {
+    case 'Owner & Management':
+      return designation === 'director' ? 'admin' : 'management';
+    case 'Administration':
+      return 'management';
+    case 'Human Resources':
+      return 'hr';
+    case 'Sales':
+      return designation === 'manager' || designation === 'director' ? 'sales_manager' : 'sales';
+    case 'Accounts':
+      return 'accounts';
+    case 'Operations':
+      return 'operations';
+    case 'IT & Development':
+      return 'it';
+    default:
+      return 'sales';
+  }
+}
+
+export function canViewCompanyProfit(
+  role: UserRole,
+  profile?: UserProfile | null
+): boolean {
+  if (profile?.accountStatus === 'suspended') return false;
+  return (
+    role === 'admin' ||
+    role === 'management' ||
+    role === 'accounts' ||
+    hasModulePermission(role, profile, 'accounts', 'approve')
+  );
+}
+
+export function canViewSalaries(
+  role: UserRole,
+  profile?: UserProfile | null
+): boolean {
+  if (profile?.accountStatus === 'suspended') return false;
+  return (
+    role === 'admin' ||
+    role === 'management' ||
+    role === 'hr' ||
+    role === 'accounts' ||
+    hasModulePermission(role, profile, 'hr', 'view')
+  );
+}
+
+export const DEPARTMENT_DASHBOARD_META: Record<
+  PersistedUserRole,
+  {
+    dashboardTitle: string;
+    subtitle: string;
+    primaryModules: AdminModuleKey[];
+  }
+> = {
+  admin: {
+    dashboardTitle: 'Owner Executive Dashboard',
+    subtitle: 'Complete business overview: revenue, actual profit, expenses, approvals, and governance.',
+    primaryModules: ['dashboard', 'accounts', 'sales', 'orders', 'hr', 'users', 'settings'],
+  },
+  management: {
+    dashboardTitle: 'Admin & Management Dashboard',
+    subtitle: 'Department oversight, employee administration, approvals, security logs, and reports.',
+    primaryModules: ['dashboard', 'users', 'reports', 'sales', 'orders', 'cms', 'settings'],
+  },
+  hr: {
+    dashboardTitle: 'Human Resources Dashboard',
+    subtitle: 'Employee profiles, attendance, leave approvals, payroll, and team performance.',
+    primaryModules: ['dashboard', 'hr', 'reports', 'documents'],
+  },
+  sales_manager: {
+    dashboardTitle: 'Sales Management Dashboard',
+    subtitle: 'Leads pipeline, customer & dealer accounts, deal approvals, targets, and commissions.',
+    primaryModules: ['dashboard', 'crm', 'sales', 'auctions', 'orders', 'reports'],
+  },
+  sales: {
+    dashboardTitle: 'Sales Executive Dashboard',
+    subtitle: 'Assigned buyer inquiries, follow-ups, CIF quotations, and active vehicle stock.',
+    primaryModules: ['dashboard', 'crm', 'sales', 'inventory', 'auctions'],
+  },
+  accounts: {
+    dashboardTitle: 'Accounts & Finance Dashboard',
+    subtitle: 'Invoices, verified payments, outstanding balances, expenses, salaries, and profit & loss.',
+    primaryModules: ['dashboard', 'accounts', 'orders', 'documents', 'reports'],
+  },
+  operations: {
+    dashboardTitle: 'Operations & Logistics Dashboard',
+    subtitle: 'Auction purchasing, yard inventory, vehicle inspections, vessel bookings, and export docs.',
+    primaryModules: ['dashboard', 'inventory', 'auctions', 'orders', 'logistics', 'documents'],
+  },
+  it: {
+    dashboardTitle: 'IT & Systems Dashboard',
+    subtitle: 'Website CMS, live API integrations, AI automation, backups, and security audit trail.',
+    primaryModules: ['dashboard', 'cms', 'ai', 'users', 'settings', 'reports'],
+  },
+  dealer: {
+    dashboardTitle: 'Dealer Partner Dashboard',
+    subtitle: 'Wholesale stock, auction bidding, quotations, and shipment tracking.',
+    primaryModules: [],
+  },
+  customer: {
+    dashboardTitle: 'Customer Portal Dashboard',
+    subtitle: 'Browse vehicles, request quotations, track shipments, and download export documents.',
+    primaryModules: [],
+  },
+};
+

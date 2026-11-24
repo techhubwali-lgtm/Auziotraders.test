@@ -9,10 +9,10 @@ import {
   getAuctionMeta,
   getAuctionStatus,
   searchLiveAuctions,
-} from './server/auctionProxy';
-import { getLiveExchangeRates } from './server/exchangeRates';
-import { runAdminAiAssistant, type AdminAiTaskType } from './server/aiAssistant';
-import type { AuctionFeedTable, SteeringType } from './src/types/portal';
+} from './server/auctionProxy.ts';
+import { getLiveExchangeRates } from './server/exchangeRates.ts';
+import { runAdminAiAssistant, type AdminAiTaskType } from './server/aiAssistant.ts';
+import type { AuctionFeedTable, SteeringType } from './src/types/portal.ts';
 
 function resolveAppDir(): string {
   if (typeof __dirname !== 'undefined') {

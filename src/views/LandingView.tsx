@@ -10,6 +10,8 @@ import {
   Gavel,
   Globe2,
   Headphones,
+  LayoutDashboard,
+  LogIn,
   Mail,
   MapPin,
   MessageCircle,
@@ -19,6 +21,7 @@ import {
   ShieldCheck,
   Ship,
   Star,
+  UserPlus,
 } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { InteractiveWorldMap } from '../components/InteractiveWorldMap';
@@ -34,6 +37,7 @@ import type {
   CustomerTestimonial,
   LandingPageContent,
   LiveExchangeRateState,
+  UserProfile,
   Vehicle,
 } from '../types/portal';
 import { CatalogView } from './CatalogView';
@@ -50,6 +54,10 @@ interface LandingViewProps {
   testimonials: CustomerTestimonial[];
   compareIds: string[];
   canImportToFirestore: boolean;
+  isAuthenticated: boolean;
+  userProfile: UserProfile | null;
+  onOpenLogin: (mode?: 'login' | 'signup') => void;
+  onOpenDashboard: () => void;
   onCountryChange: (countryCode: string) => void;
   onPortChange: (portId: string) => void;
   onSourceModeChange: (mode: 'curated' | 'live_auctions') => void;
@@ -152,6 +160,10 @@ export function LandingView({
   testimonials,
   compareIds,
   canImportToFirestore,
+  isAuthenticated,
+  userProfile,
+  onOpenLogin,
+  onOpenDashboard,
   onCountryChange,
   onPortChange,
   onSourceModeChange,
@@ -354,6 +366,54 @@ export function LandingView({
                 >
                   <span>Request a Vehicle</span>
                 </button>
+              </div>
+
+              {/* Direct Home Page Account Login & Sign Up Access */}
+              <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs sm:text-sm text-slate-300">
+                {isAuthenticated ? (
+                  <>
+                    <span>
+                      Signed in as{' '}
+                      <strong className="text-white">
+                        {userProfile?.displayName || 'Member'}
+                      </strong>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={onOpenDashboard}
+                      className="inline-flex items-center gap-1.5 font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer whitespace-nowrap"
+                    >
+                      <LayoutDashboard className="w-4 h-4" />
+                      <span>Open My Dashboard</span>
+                      <ArrowRight className="w-3.5 h-3.5" />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="text-slate-400">Buyer, Dealer, or Team Member?</span>
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => onOpenLogin('login')}
+                        className="inline-flex items-center gap-1.5 font-semibold text-white hover:text-amber-400 transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        <LogIn className="w-3.5 h-3.5 text-amber-400" />
+                        <span>Login</span>
+                      </button>
+                      <span className="text-slate-600" aria-hidden="true">
+                        ·
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onOpenLogin('signup')}
+                        className="inline-flex items-center gap-1.5 font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        <UserPlus className="w-3.5 h-3.5" />
+                        <span>Create Free Account (Sign Up)</span>
+                      </button>
+                    </div>
+                  </>
+                )}
               </div>
             </div>
 

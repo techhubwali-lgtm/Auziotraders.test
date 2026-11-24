@@ -51,6 +51,7 @@ import type {
   ShippingMethod,
   SourcingOption,
   SourcingRequest,
+  StaffInvitation,
   TeamChannelId,
   TeamChannelMessage,
   TeamTask,
@@ -433,6 +434,21 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
   }
 }
 
+export function subscribeOwnUserProfile(
+  uid: string,
+  onData: (profile: UserProfile | null) => void
+): Unsubscribe {
+  return onSnapshot(
+    doc(db, 'users', uid),
+    (snap) => {
+      onData(snap.exists() ? (snap.data() as UserProfile) : null);
+    },
+    () => {
+      // Ignore transient read errors while account is initializing
+    }
+  );
+}
+
 export async function registerCustomerProfile(input: {
   uid: string;
   email: string;
@@ -451,6 +467,7 @@ export async function registerCustomerProfile(input: {
     email: input.email.trim().slice(0, 120),
     displayName: input.displayName.trim().slice(0, 100),
     role: chosenRole,
+    accountStatus: 'active',
     companyName: input.companyName.trim().slice(0, 120),
     country: input.country.trim().slice(0, 80),
     defaultPortId: input.defaultPortId.trim().slice(0, 64),
@@ -513,6 +530,11 @@ export async function adminUpdateUser(
     assignedRepName: string;
     assignedRepEmail: string;
     department?: string;
+    designationLevel?: UserProfile['designationLevel'];
+    employeeCode?: string;
+    reportingManagerName?: string;
+    accountStatus?: UserProfile['accountStatus'];
+    twoFactorRequired?: boolean;
     permissions?: RolePermissionsMap;
   }
 ): Promise<void> {
@@ -528,16 +550,34 @@ export async function adminUpdateUser(
     if (typeof updates.department === 'string') {
       payload.department = updates.department.trim().slice(0, 60);
     }
+    if (updates.designationLevel) {
+      payload.designationLevel = updates.designationLevel;
+    }
+    if (typeof updates.employeeCode === 'string') {
+      payload.employeeCode = updates.employeeCode.trim().slice(0, 32);
+    }
+    if (typeof updates.reportingManagerName === 'string') {
+      payload.reportingManagerName = updates.reportingManagerName.trim().slice(0, 100);
+    }
+    if (updates.accountStatus) {
+      payload.accountStatus = updates.accountStatus;
+    }
+    if (typeof updates.twoFactorRequired === 'boolean') {
+      payload.twoFactorRequired = updates.twoFactorRequired;
+    }
     if (updates.permissions) {
       payload.permissions = updates.permissions;
     }
     await updateDoc(doc(db, 'users', uid), payload);
     void recordAuditLog({
       actorRole: 'admin',
-      action: 'user_permissions_updated',
+      action:
+        updates.accountStatus === 'suspended'
+          ? 'employee_account_suspended'
+          : 'user_permissions_updated',
       targetType: 'user',
       targetId: uid,
-      summary: `Updated user ${uid}: role=${updates.role}, verified=${String(updates.verified)}${updates.permissions ? ', custom granular permissions saved' : ''}.`,
+      summary: `Updated user ${uid}: role=${updates.role}, status=${updates.accountStatus || 'active'}, verified=${String(updates.verified)}${updates.permissions ? ', granular permissions saved' : ''}.`,
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
@@ -2074,5 +2114,159 @@ export async function deleteSalesTarget(id: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, `salesTargets/${id}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Admin-Provisioned Staff Invitations (No Staff Self-Registration)
+// ---------------------------------------------------------------------------
+
+export function subscribeStaffInvitations(
+  canView: boolean,
+  onData: (items: StaffInvitation[]) => void
+): Unsubscribe {
+  if (!canView) {
+    onData([]);
+    return () => {};
+  }
+  return onSnapshot(
+    collection(db, 'staffInvitations'),
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<StaffInvitation, 'id'>) }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      onData(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'staffInvitations');
+      } catch {
+        // Logged
+      }
+    }
+  );
+}
+
+export async function createStaffInvitation(
+  input: Omit<StaffInvitation, 'id' | 'status' | 'acceptedByUid' | 'createdAt' | 'updatedAt'>
+): Promise<string> {
+  const id = generateDocumentId('inv');
+  const path = `staffInvitations/${id}`;
+  const normalizedEmail = input.officialEmail.trim().toLowerCase().slice(0, 120);
+  try {
+    await setDoc(doc(db, 'staffInvitations', id), {
+      employeeName: input.employeeName.trim().slice(0, 100),
+      employeeCode: input.employeeCode.trim().toUpperCase().slice(0, 32),
+      officialEmail: normalizedEmail,
+      department: input.department.trim().slice(0, 60),
+      designationLevel: input.designationLevel,
+      reportingManagerName: input.reportingManagerName.trim().slice(0, 100),
+      role: input.role,
+      permissions: input.permissions || {},
+      twoFactorRequired: Boolean(input.twoFactorRequired),
+      status: 'pending',
+      invitedByUid: input.invitedByUid.slice(0, 128),
+      invitedByEmail: input.invitedByEmail.trim().slice(0, 120),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    void recordAuditLog({
+      actorRole: 'admin',
+      action: 'employee_invited',
+      targetType: 'staffInvitation',
+      targetId: id,
+      summary: `Created employee invitation for ${input.employeeName} (${normalizedEmail}) — ${input.department} / ${input.role} (${input.employeeCode}).`,
+    });
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function revokeStaffInvitation(inviteId: string): Promise<void> {
+  const path = `staffInvitations/${inviteId}`;
+  try {
+    await updateDoc(doc(db, 'staffInvitations', inviteId), {
+      status: 'revoked',
+      updatedAt: serverTimestamp(),
+    });
+    void recordAuditLog({
+      actorRole: 'admin',
+      action: 'employee_invitation_revoked',
+      targetType: 'staffInvitation',
+      targetId: inviteId,
+      summary: `Revoked pending employee invitation ${inviteId}.`,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function claimPendingStaffInvitation(params: {
+  uid: string;
+  email: string;
+  displayName: string;
+}): Promise<UserProfile | null> {
+  const normalizedEmail = params.email.trim().toLowerCase();
+  if (!normalizedEmail) return null;
+  try {
+    const q = query(
+      collection(db, 'staffInvitations'),
+      where('officialEmail', '==', normalizedEmail)
+    );
+    const snap = await getDocs(q);
+    const pendingDoc = snap.docs.find((d) => d.data().status === 'pending');
+    if (!pendingDoc) return null;
+
+    const inv = pendingDoc.data() as Omit<StaffInvitation, 'id'>;
+    const inviteId = pendingDoc.id;
+
+    const newProfile: UserProfile = {
+      uid: params.uid,
+      email: normalizedEmail,
+      displayName: inv.employeeName || params.displayName || 'Team Member',
+      role: inv.role,
+      department: inv.department,
+      designationLevel: inv.designationLevel,
+      employeeCode: inv.employeeCode,
+      reportingManagerName: inv.reportingManagerName || '',
+      accountStatus: 'active',
+      twoFactorRequired: Boolean(inv.twoFactorRequired),
+      permissions: inv.permissions || {},
+      companyName: 'AUZIO TRADERS',
+      country: 'Japan',
+      defaultPortId: 'mombasa-ke',
+      phone: '',
+      consigneeAddress: 'Yokohama, Japan',
+      assignedRepName: '',
+      assignedRepEmail: '',
+      verified: true,
+    };
+
+    const batch = writeBatch(db);
+    batch.set(doc(db, 'users', params.uid), {
+      ...newProfile,
+      invitationId: inviteId,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    batch.update(doc(db, 'staffInvitations', inviteId), {
+      status: 'accepted',
+      acceptedByUid: params.uid,
+      updatedAt: serverTimestamp(),
+    });
+    await batch.commit();
+
+    void recordAuditLog({
+      actorRole: inv.role,
+      action: 'employee_invitation_accepted',
+      targetType: 'user',
+      targetId: params.uid,
+      summary: `${newProfile.displayName} (${normalizedEmail}) activated invited ${inv.department} (${inv.role}) account.`,
+    });
+    return newProfile;
+  } catch {
+    return null;
+  }
+}
+
 
 

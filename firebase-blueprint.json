@@ -8,7 +8,13 @@
         "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "email": { "type": "string", "format": "email", "minLength": 5, "maxLength": 120 },
         "displayName": { "type": "string", "minLength": 2, "maxLength": 100 },
-        "role": { "type": "string", "enum": ["customer", "sales", "operations", "admin"] },
+        "role": { "type": "string", "enum": ["customer", "dealer", "sales", "sales_manager", "accounts", "operations", "hr", "it", "management", "admin"] },
+        "department": { "type": "string", "maxLength": 60 },
+        "designationLevel": { "type": "string", "enum": ["director", "manager", "executive", "assistant"] },
+        "employeeCode": { "type": "string", "maxLength": 32 },
+        "reportingManagerName": { "type": "string", "maxLength": 100 },
+        "accountStatus": { "type": "string", "enum": ["active", "suspended"] },
+        "twoFactorRequired": { "type": "boolean" },
         "companyName": { "type": "string", "maxLength": 120 },
         "country": { "type": "string", "maxLength": 80 },
         "defaultPortId": { "type": "string", "maxLength": 64 },
@@ -25,6 +31,27 @@
         "defaultPortId", "phone", "consigneeAddress", "assignedRepName",
         "assignedRepEmail", "verified", "createdAt", "updatedAt"
       ]
+    },
+    "StaffInvitation": {
+      "title": "StaffInvitation",
+      "description": "Admin-provisioned employee invitation encoding department, designation level, assigned role, and granular permissions.",
+      "type": "object",
+      "properties": {
+        "employeeName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "employeeCode": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "officialEmail": { "type": "string", "format": "email", "minLength": 5, "maxLength": 120 },
+        "department": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "designationLevel": { "type": "string", "enum": ["director", "manager", "executive", "assistant"] },
+        "reportingManagerName": { "type": "string", "maxLength": 100 },
+        "role": { "type": "string", "enum": ["sales", "sales_manager", "accounts", "operations", "hr", "it", "management", "admin"] },
+        "permissions": { "type": "object" },
+        "twoFactorRequired": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "revoked"] },
+        "invitedByUid": { "type": "string", "maxLength": 128 },
+        "invitedByEmail": { "type": "string", "maxLength": 120 },
+        "acceptedByUid": { "type": "string", "maxLength": 128 }
+      },
+      "required": ["employeeName", "employeeCode", "officialEmail", "department", "designationLevel", "role", "status"]
     },
     "Vehicle": {
       "title": "Vehicle",
@@ -558,6 +585,10 @@
     "/salesTargets/{targetId}": {
       "schema": { "$ref": "#/entities/SalesTarget" },
       "description": "Sales team targets and commission plans."
+    },
+    "/staffInvitations/{inviteId}": {
+      "schema": { "$ref": "#/entities/StaffInvitation" },
+      "description": "Admin-created employee onboarding invitations claimed atomically upon verified sign-in."
     }
   }
 }

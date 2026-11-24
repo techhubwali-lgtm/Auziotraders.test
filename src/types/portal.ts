@@ -256,12 +256,20 @@ export interface LiveAuctionStatusResponse {
   message: string;
 }
 
+export type DesignationLevel = 'director' | 'manager' | 'executive' | 'assistant';
+export type AccountStatus = 'active' | 'suspended';
+
 export interface UserProfile {
   uid: string;
   email: string;
   displayName: string;
   role: PersistedUserRole;
   department?: string;
+  designationLevel?: DesignationLevel;
+  employeeCode?: string;
+  reportingManagerName?: string;
+  accountStatus?: AccountStatus;
+  twoFactorRequired?: boolean;
   permissions?: RolePermissionsMap;
   companyName: string;
   country: string;
@@ -271,6 +279,25 @@ export interface UserProfile {
   assignedRepName: string;
   assignedRepEmail: string;
   verified: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface StaffInvitation {
+  id: string;
+  employeeName: string;
+  employeeCode: string;
+  officialEmail: string;
+  department: string;
+  designationLevel: DesignationLevel;
+  reportingManagerName: string;
+  role: PersistedUserRole;
+  permissions: RolePermissionsMap;
+  twoFactorRequired: boolean;
+  status: 'pending' | 'accepted' | 'revoked';
+  invitedByUid: string;
+  invitedByEmail: string;
+  acceptedByUid?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }

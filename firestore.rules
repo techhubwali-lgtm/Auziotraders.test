@@ -41,16 +41,26 @@ service cloud.firestore {
       return userDocExists() ? userData().role : 'visitor';
     }
 
+    function isActiveAccount() {
+      return !userDocExists() ||
+        !('accountStatus' in userData()) ||
+        userData().accountStatus != 'suspended';
+    }
+
     function isAdmin() {
-      return isVerifiedAuth() && (
-        request.auth.token.email == 'techhub.wali@gmail.com' ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        userRole() == 'admin'
-      );
+      return (isVerifiedAuth() && request.auth.token.email == 'techhub.wali@gmail.com') ||
+        (
+          isSignedIn() &&
+          isActiveAccount() && (
+            exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+            userRole() == 'admin'
+          )
+        );
     }
 
     function hasExplicitPerm(moduleKey, action) {
-      return isVerifiedAuth() &&
+      return isSignedIn() &&
+        isActiveAccount() &&
         userDocExists() &&
         ('permissions' in userData()) &&
         userData().permissions is map &&
@@ -60,42 +70,43 @@ service cloud.firestore {
     }
 
     function isManagement() {
-      return isAdmin() || (isVerifiedAuth() && userRole() == 'management');
+      return isAdmin() || (isSignedIn() && isActiveAccount() && userRole() == 'management');
     }
 
     function isSalesManager() {
-      return isManagement() || (isVerifiedAuth() && userRole() == 'sales_manager');
+      return isManagement() || (isSignedIn() && isActiveAccount() && userRole() == 'sales_manager');
     }
 
     function isSales() {
-      return isSalesManager() || (isVerifiedAuth() && userRole() == 'sales');
+      return isSalesManager() || (isSignedIn() && isActiveAccount() && userRole() == 'sales');
     }
 
     function isAccounts() {
-      return isManagement() || (isVerifiedAuth() && userRole() == 'accounts');
+      return isManagement() || (isSignedIn() && isActiveAccount() && userRole() == 'accounts');
     }
 
     function isOperations() {
-      return isManagement() || (isVerifiedAuth() && userRole() == 'operations');
+      return isManagement() || (isSignedIn() && isActiveAccount() && userRole() == 'operations');
     }
 
     function isHr() {
-      return isManagement() || (isVerifiedAuth() && userRole() == 'hr');
+      return isManagement() || (isSignedIn() && isActiveAccount() && userRole() == 'hr');
     }
 
     function isIt() {
-      return isAdmin() || (isVerifiedAuth() && userRole() == 'it');
+      return isAdmin() || (isSignedIn() && isActiveAccount() && userRole() == 'it');
     }
 
     function isStaff() {
       return isAdmin() || (
-        isVerifiedAuth() &&
+        isSignedIn() &&
+        isActiveAccount() &&
         userRole() in ['sales', 'sales_manager', 'accounts', 'operations', 'hr', 'it', 'management', 'admin']
       );
     }
 
     function canAccessModule(moduleKey, action, defaultAllowed) {
-      return isAdmin() || defaultAllowed || hasExplicitPerm(moduleKey, action);
+      return isAdmin() || (isActiveAccount() && (defaultAllowed || hasExplicitPerm(moduleKey, action)));
     }
 
     function isNonEmptyString(val, maxLen) {
@@ -249,6 +260,32 @@ service cloud.firestore {
         request.resource.data.bankAddress == resource.data.bankAddress;
     }
 
+    function isValidStaffInvitation(data) {
+      return isNonEmptyString(data.employeeName, 100) &&
+        isNonEmptyString(data.employeeCode, 32) &&
+        isNonEmptyString(data.officialEmail, 120) &&
+        isNonEmptyString(data.department, 60) &&
+        data.designationLevel in ['director', 'manager', 'executive', 'assistant'] &&
+        isOptionalString(data.reportingManagerName, 100) &&
+        data.role in ['sales', 'sales_manager', 'accounts', 'operations', 'hr', 'it', 'management', 'admin'] &&
+        data.twoFactorRequired is bool &&
+        data.status in ['pending', 'accepted', 'revoked'];
+    }
+
+    function isValidStaffInvitationClaim(uid) {
+      return isVerifiedAuth() &&
+        isOwner(uid) &&
+        ('invitationId' in request.resource.data) &&
+        isValidId(request.resource.data.invitationId) &&
+        exists(/databases/$(database)/documents/staffInvitations/$(request.resource.data.invitationId)) &&
+        get(/databases/$(database)/documents/staffInvitations/$(request.resource.data.invitationId)).data.status == 'pending' &&
+        get(/databases/$(database)/documents/staffInvitations/$(request.resource.data.invitationId)).data.officialEmail == request.auth.token.email.lower() &&
+        request.resource.data.uid == uid &&
+        request.resource.data.role == get(/databases/$(database)/documents/staffInvitations/$(request.resource.data.invitationId)).data.role &&
+        request.resource.data.accountStatus == 'active' &&
+        getAfter(/databases/$(database)/documents/staffInvitations/$(request.resource.data.invitationId)).data.status == 'accepted';
+    }
+
     // =========================================================================
     // 1. User Profiles & Granular Role/Permission Registry
     // =========================================================================
@@ -257,33 +294,36 @@ service cloud.firestore {
       allow get: if isValidId(uid) && (isOwner(uid) || isStaff());
       allow list: if isStaff();
 
-      // Self-registration strictly restricted to customer or dealer role (never staff/admin/custom permissions)
+      // Self-registration strictly restricted to customer or dealer role.
+      // Staff accounts can ONLY be created by Admins OR by claiming an Admin-issued invitation matching verified email.
       allow create: if isValidId(uid) && (
         (
           isOwner(uid) &&
           isValidPublicRegistrationRole(request.resource.data.role) &&
           request.resource.data.uid == uid &&
           !('permissions' in request.resource.data) &&
+          (!('accountStatus' in request.resource.data) || request.resource.data.accountStatus == 'active') &&
           isNonEmptyString(request.resource.data.email, 160) &&
           isNonEmptyString(request.resource.data.displayName, 120)
-        ) || (
+        ) || isValidStaffInvitationClaim(uid) || (
           canAccessModule('users', 'create', isAdmin()) &&
           isValidPersistedRole(request.resource.data.role)
         )
       );
 
-      // Users can update profile details, but CANNOT self-escalate role, verified flag, or permissions
+      // Users can update basic profile details, but CANNOT self-escalate role, verified flag, accountStatus, or permissions
       allow update: if isValidId(uid) && (
         (
           isOwner(uid) &&
+          isActiveAccount() &&
           request.resource.data.uid == resource.data.uid &&
           request.resource.data.role == resource.data.role &&
           request.resource.data.verified == resource.data.verified &&
+          (!('accountStatus' in request.resource.data) || request.resource.data.accountStatus == resource.data.accountStatus) &&
           (!('permissions' in request.resource.data) || request.resource.data.permissions == resource.data.permissions)
         ) || (
           canAccessModule('users', 'edit', isManagement()) &&
           isValidPersistedRole(request.resource.data.role) &&
-          // Only Owner / Super Admin can assign admin role or edit custom permissions map
           (
             isAdmin() || (
               request.resource.data.role != 'admin' &&
@@ -537,7 +577,8 @@ service cloud.firestore {
     // =========================================================================
 
     match /financeRecords/{recordId} {
-      allow get, list: if canAccessModule('accounts', 'view', isAccounts() || isSalesManager());
+      // Strictly Owner, Management, Accounts, or explicitly authorized accounts:view (never Sales Executives or Customers)
+      allow get, list: if canAccessModule('accounts', 'view', isAccounts());
       allow create: if isValidId(recordId) &&
         canAccessModule('accounts', 'create', isAccounts()) &&
         isValidFinanceRecord(request.resource.data);
@@ -607,6 +648,40 @@ service cloud.firestore {
         canAccessModule('sales', 'approve', isSalesManager()) &&
         isValidSalesTarget(request.resource.data);
       allow delete: if isValidId(targetId) && canAccessModule('sales', 'delete', isManagement());
+    }
+
+    // =========================================================================
+    // 15. Admin-Provisioned Staff Invitations (No Staff Self-Registration)
+    // =========================================================================
+
+    match /staffInvitations/{inviteId} {
+      allow get, list: if canAccessModule('users', 'view', isManagement() || isHr()) ||
+        (isVerifiedAuth() && resource.data.officialEmail == request.auth.token.email.lower());
+
+      allow create: if isValidId(inviteId) &&
+        canAccessModule('users', 'create', isManagement()) &&
+        isValidStaffInvitation(request.resource.data) &&
+        request.resource.data.status == 'pending' &&
+        (isAdmin() || request.resource.data.role != 'admin');
+
+      allow update: if isValidId(inviteId) && (
+        (
+          canAccessModule('users', 'edit', isManagement()) &&
+          isValidStaffInvitation(request.resource.data) &&
+          (isAdmin() || request.resource.data.role != 'admin')
+        ) || (
+          isVerifiedAuth() &&
+          resource.data.status == 'pending' &&
+          resource.data.officialEmail == request.auth.token.email.lower() &&
+          request.resource.data.status == 'accepted' &&
+          request.resource.data.acceptedByUid == request.auth.uid &&
+          request.resource.data.officialEmail == resource.data.officialEmail &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.department == resource.data.department
+        )
+      );
+
+      allow delete: if isValidId(inviteId) && canAccessModule('users', 'delete', isAdmin());
     }
   }
 }

@@ -14,7 +14,7 @@ import type {
   SteeringType,
   TransmissionType,
   Vehicle,
-} from '../src/types/portal';
+} from '../src/types/portal.ts';
 
 // Strictly allowlisted upstream origins — NEVER constructed from user input
 const AJES_API_BASE = 'http://78.46.90.228/api/';

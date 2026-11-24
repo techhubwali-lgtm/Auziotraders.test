@@ -1,4 +1,13 @@
-import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
+import {
+  createUserWithEmailAndPassword,
+  onAuthStateChanged,
+  sendPasswordResetEmail,
+  signInWithEmailAndPassword,
+  signInWithPopup,
+  signOut,
+  updateProfile,
+  type User,
+} from 'firebase/auth';
 import { CheckCircle2, GitCompare, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminVehicleModal } from './components/AdminVehicleModal';
@@ -35,6 +44,7 @@ import { auth, googleProvider } from './lib/firebase';
 import { fetchLiveExchangeRates } from './services/exchangeRateService';
 import {
   adminUpdateUser,
+  claimPendingStaffInvitation,
   clearSampleTradeData,
   convertQuotationToOrder,
   createExportDocument,
@@ -42,6 +52,7 @@ import {
   createHrLeaveRequest,
   createQuotation,
   createSourcingRequest,
+  createStaffInvitation,
   createTeamTask,
   deleteExportDocument,
   deleteFinanceRecord,
@@ -58,6 +69,7 @@ import {
   registerCustomerProfile,
   respondToQuotation,
   reviewHrLeaveRequest,
+  revokeStaffInvitation,
   saveBankingDetailsProtected,
   saveCompanySettings,
   saveHrEmployee,
@@ -79,6 +91,8 @@ import {
   subscribeQuotations,
   subscribeSalesTargets,
   subscribeSourcingRequests,
+  subscribeStaffInvitations,
+  subscribeOwnUserProfile,
   subscribeTeamMessages,
   subscribeTeamTasks,
   subscribeTestimonials,
@@ -115,6 +129,7 @@ import type {
   ShippingMethod,
   SourcingOption,
   SourcingRequest,
+  StaffInvitation,
   TeamChannelMessage,
   TeamTask,
   UserProfile,
@@ -157,6 +172,33 @@ function isBuyerRole(role: UserRole): boolean {
   return role === 'customer' || role === 'dealer';
 }
 
+function formatFirebaseAuthError(err: unknown): string {
+  const code =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code || '')
+      : '';
+  switch (code) {
+    case 'auth/email-already-in-use':
+      return 'An account with this email already exists. Please switch to Login.';
+    case 'auth/invalid-email':
+      return 'Please enter a valid email address.';
+    case 'auth/weak-password':
+      return 'Password is too weak. Please choose at least 6 characters.';
+    case 'auth/invalid-credential':
+    case 'auth/wrong-password':
+    case 'auth/user-not-found':
+      return 'Incorrect email or password. Please check your credentials and try again.';
+    case 'auth/too-many-requests':
+      return 'Too many failed attempts. Please wait a moment or reset your password.';
+    case 'auth/operation-not-allowed':
+      return 'Email/Password sign-in is not enabled in Firebase Authentication settings.';
+    case 'auth/popup-closed-by-user':
+      return 'Google sign-in window was closed before completing.';
+    default:
+      return err instanceof Error ? err.message : 'Authentication could not be completed.';
+  }
+}
+
 export default function App() {
   // Navigation & Global Trade Preferences (persisted in localStorage)
   const [activeView, setActiveView] = useState<AppView>('home');
@@ -187,9 +229,16 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [cloudProfile, setCloudProfile] = useState<UserProfile | null>(null);
   const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [loginModalMode, setLoginModalMode] = useState<'login' | 'signup'>('login');
   const [needsProfileCompletion, setNeedsProfileCompletion] = useState(false);
   const [authError, setAuthError] = useState('');
   const [isSigningIn, setIsSigningIn] = useState(false);
+
+  const openAuthModal = useCallback((mode: 'login' | 'signup' = 'login') => {
+    setAuthError('');
+    setLoginModalMode(mode);
+    setLoginModalOpen(true);
+  }, []);
 
   // Cloud Datasets
   const [cloudVehicles, setCloudVehicles] = useState<Vehicle[]>([]);
@@ -210,6 +259,7 @@ export default function App() {
   const [cloudTeamTasks, setCloudTeamTasks] = useState<TeamTask[]>([]);
   const [cloudTeamMessages, setCloudTeamMessages] = useState<TeamChannelMessage[]>([]);
   const [cloudSalesTargets, setCloudSalesTargets] = useState<SalesTarget[]>([]);
+  const [cloudStaffInvitations, setCloudStaffInvitations] = useState<StaffInvitation[]>([]);
 
   // Local fallback datasets for non-populated collections
   const [localUsers, setLocalUsers] = useState<UserProfile[]>(DEMO_USERS);
@@ -329,7 +379,7 @@ export default function App() {
     };
   }, [settings, liveFx]);
 
-  // Resolve real Firebase Auth session & profile
+  // Resolve real Firebase Auth session, enforce immediate suspension & claim pending staff invitations
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
@@ -340,6 +390,17 @@ export default function App() {
       }
       const existing = await getUserProfile(user.uid);
       if (existing) {
+        if (existing.accountStatus === 'suspended') {
+          await signOut(auth);
+          setCloudProfile(null);
+          setNeedsProfileCompletion(false);
+          setActiveView('home');
+          setAuthError(
+            'This account has been suspended by Administration. Please contact HR or your system administrator.'
+          );
+          setLoginModalOpen(true);
+          return;
+        }
         setCloudProfile(existing);
         setNeedsProfileCompletion(false);
         if (existing.defaultPortId) handlePortChange(existing.defaultPortId, true);
@@ -349,6 +410,10 @@ export default function App() {
           email: user.email,
           displayName: user.displayName || 'Auzio Trade Director',
           role: 'admin',
+          department: 'Owner & Management',
+          designationLevel: 'director',
+          accountStatus: 'active',
+          twoFactorRequired: true,
           companyName: 'AUZIO TRADERS HQ',
           country: 'Japan',
           defaultPortId: 'mombasa-ke',
@@ -359,17 +424,55 @@ export default function App() {
           verified: true,
         });
         setNeedsProfileCompletion(false);
+      } else if (user.email && user.emailVerified) {
+        const claimed = await claimPendingStaffInvitation({
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName || '',
+        });
+        if (claimed) {
+          setCloudProfile(claimed);
+          setNeedsProfileCompletion(false);
+        } else {
+          setCloudProfile((prev) => (prev && prev.uid === user.uid ? prev : null));
+        }
       } else {
-        setCloudProfile(null);
+        setCloudProfile((prev) => (prev && prev.uid === user.uid ? prev : null));
       }
     });
     return () => unsub();
   }, [handlePortChange]);
 
-  const effectiveRole: UserRole = cloudProfile ? cloudProfile.role : 'visitor';
-  const isAuthenticated = Boolean(firebaseUser && firebaseUser.emailVerified && cloudProfile);
+  // Real-time sync of the signed-in user's own profile so Admin role changes & suspensions apply immediately
+  useEffect(() => {
+    if (!firebaseUser) return;
+    const isBootstrapAdmin =
+      firebaseUser.email === BOOTSTRAP_ADMIN_EMAIL && firebaseUser.emailVerified;
+    const unsub = subscribeOwnUserProfile(firebaseUser.uid, (liveProfile) => {
+      if (!liveProfile) return;
+      if (liveProfile.accountStatus === 'suspended' && !isBootstrapAdmin) {
+        void signOut(auth);
+        setCloudProfile(null);
+        setNeedsProfileCompletion(false);
+        setActiveView('home');
+        setAuthError(
+          'This account has been suspended by Administration. Please contact HR or your system administrator.'
+        );
+        setLoginModalOpen(true);
+        return;
+      }
+      setCloudProfile(liveProfile);
+      setNeedsProfileCompletion(false);
+    });
+    return () => unsub();
+  }, [firebaseUser]);
+
+  const isSuspendedSession = cloudProfile?.accountStatus === 'suspended';
+  const effectiveRole: UserRole =
+    cloudProfile && !isSuspendedSession ? cloudProfile.role : 'visitor';
+  const isAuthenticated = Boolean(firebaseUser && cloudProfile && !isSuspendedSession);
   const isLiveFirestoreMode = isAuthenticated;
-  const activeProfile: UserProfile | null = cloudProfile;
+  const activeProfile: UserProfile | null = isSuspendedSession ? null : cloudProfile;
 
   // Public Firestore subscriptions
   useEffect(() => {
@@ -397,6 +500,9 @@ export default function App() {
   );
   const canViewHr = Boolean(
     realStaff && hasModulePermission(effectiveRole, activeProfile, 'hr', 'view')
+  );
+  const canViewUsers = Boolean(
+    realStaff && hasModulePermission(effectiveRole, activeProfile, 'users', 'view')
   );
   const realCustomerUid =
     isAuthenticated && isBuyerRole(effectiveRole) && firebaseUser ? firebaseUser.uid : null;
@@ -437,6 +543,12 @@ export default function App() {
       setCloudSalesTargets([]);
     }
 
+    if (canViewUsers) {
+      unsubs.push(subscribeStaffInvitations(true, setCloudStaffInvitations));
+    } else {
+      setCloudStaffInvitations([]);
+    }
+
     if (canViewFinance) {
       unsubs.push(subscribeFinanceRecords(true, setCloudFinanceRecords));
     } else {
@@ -460,7 +572,7 @@ export default function App() {
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [realStaff, canViewFinance, canViewHr, canViewAudit, realCustomerUid]);
+  }, [realStaff, canViewUsers, canViewFinance, canViewHr, canViewAudit, realCustomerUid]);
 
   // Resolved datasets
   const vehicles = useMemo(
@@ -491,6 +603,15 @@ export default function App() {
       const isBootstrapAdmin = user.email === BOOTSTRAP_ADMIN_EMAIL && user.emailVerified;
 
       if (profile) {
+        if (profile.accountStatus === 'suspended') {
+          await signOut(auth);
+          setCloudProfile(null);
+          setNeedsProfileCompletion(false);
+          setAuthError(
+            'This account has been suspended by Administration. Please contact HR or your system administrator.'
+          );
+          return;
+        }
         setCloudProfile(profile);
         setNeedsProfileCompletion(false);
         setLoginModalOpen(false);
@@ -526,6 +647,10 @@ export default function App() {
           email: user.email || BOOTSTRAP_ADMIN_EMAIL,
           displayName: user.displayName || 'Auzio Trade Director',
           role: 'admin',
+          department: 'Owner & Management',
+          designationLevel: 'director',
+          accountStatus: 'active',
+          twoFactorRequired: true,
           companyName: 'AUZIO TRADERS HQ',
           country: 'Japan',
           defaultPortId: 'mombasa-ke',
@@ -543,14 +668,147 @@ export default function App() {
         return;
       }
 
+      // Check for Admin-provisioned employee invitation matching verified Google email
+      if (user.email && user.emailVerified) {
+        const claimed = await claimPendingStaffInvitation({
+          uid: user.uid,
+          email: user.email,
+          displayName: user.displayName || '',
+        });
+        if (claimed) {
+          setCloudProfile(claimed);
+          setNeedsProfileCompletion(false);
+          setLoginModalOpen(false);
+          setActiveView('staff_console');
+          notify(
+            `Welcome to your ${claimed.department || 'Department'} Dashboard, ${claimed.displayName}`
+          );
+          return;
+        }
+      }
+
       // First-time buyer account: prompt profile completion (strictly customer or dealer)
       setNeedsProfileCompletion(true);
     } catch (err) {
-      const message =
-        err instanceof Error && !err.message.includes('popup-closed-by-user')
-          ? err.message
-          : 'Sign-in was cancelled or could not be completed. Please try again.';
-      setAuthError(message);
+      setAuthError(formatFirebaseAuthError(err));
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  // Open Email & Password Registration — anyone can sign up; default role is customer until Admin defines department role
+  const handleEmailSignUp = async (input: {
+    fullName: string;
+    email: string;
+    password: string;
+  }) => {
+    setAuthError('');
+    setIsSigningIn(true);
+    try {
+      const cred = await createUserWithEmailAndPassword(auth, input.email.trim(), input.password);
+      await updateProfile(cred.user, { displayName: input.fullName.trim() });
+
+      const country = getWorldCountryByCode(selectedCountryCode);
+      const created = await registerCustomerProfile({
+        uid: cred.user.uid,
+        email: cred.user.email || input.email.trim(),
+        accountType: 'customer',
+        displayName: input.fullName.trim(),
+        companyName: '',
+        country: country.name,
+        defaultPortId: selectedPortId,
+        phone: '',
+        consigneeAddress: '',
+      });
+
+      setCloudProfile(created);
+      setNeedsProfileCompletion(false);
+      setLoginModalOpen(false);
+      setActiveView('customer_portal');
+      notify(`Welcome, ${created.displayName}! Your account has been created.`);
+    } catch (err) {
+      setAuthError(formatFirebaseAuthError(err));
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  // Email & Password Login — automatically routes user to their Admin-assigned role dashboard
+  const handleEmailSignIn = async (input: { email: string; password: string }) => {
+    setAuthError('');
+    setIsSigningIn(true);
+    try {
+      const cred = await signInWithEmailAndPassword(auth, input.email.trim(), input.password);
+      const user = cred.user;
+      let profile = await getUserProfile(user.uid);
+
+      if (!profile) {
+        const country = getWorldCountryByCode(selectedCountryCode);
+        profile = await registerCustomerProfile({
+          uid: user.uid,
+          email: user.email || input.email.trim(),
+          accountType: 'customer',
+          displayName: user.displayName || input.email.split('@')[0] || 'Auzio User',
+          companyName: '',
+          country: country.name,
+          defaultPortId: selectedPortId,
+          phone: '',
+          consigneeAddress: '',
+        });
+      }
+
+      if (profile.accountStatus === 'suspended') {
+        await signOut(auth);
+        setCloudProfile(null);
+        setNeedsProfileCompletion(false);
+        setAuthError(
+          'This account has been suspended by Administration. Please contact HR or your system administrator.'
+        );
+        return;
+      }
+
+      setCloudProfile(profile);
+      setNeedsProfileCompletion(false);
+      setLoginModalOpen(false);
+      if (profile.defaultPortId) handlePortChange(profile.defaultPortId, true);
+
+      if (isStaffRole(profile.role)) {
+        setActiveView('staff_console');
+        void recordAuditLog({
+          actorRole: profile.role,
+          action: 'staff_login_success',
+          targetType: 'user',
+          targetId: user.uid,
+          summary: `Team member signed in via email: ${profile.email} (${profile.role}).`,
+        });
+        notify(`Welcome back, ${profile.displayName}`);
+      } else {
+        setActiveView('customer_portal');
+        void recordAuditLog({
+          actorRole: profile.role,
+          action: 'login_success',
+          targetType: 'user',
+          targetId: user.uid,
+          summary: `Account signed in via email: ${profile.email}.`,
+        });
+        notify(`Welcome back, ${profile.displayName}`);
+      }
+    } catch (err) {
+      setAuthError(formatFirebaseAuthError(err));
+    } finally {
+      setIsSigningIn(false);
+    }
+  };
+
+  const handleResetPassword = async (email: string): Promise<boolean> => {
+    setAuthError('');
+    setIsSigningIn(true);
+    try {
+      await sendPasswordResetEmail(auth, email.trim());
+      return true;
+    } catch (err) {
+      setAuthError(formatFirebaseAuthError(err));
+      return false;
     } finally {
       setIsSigningIn(false);
     }
@@ -717,10 +975,7 @@ export default function App() {
             onCountryChange={handleCountryChange}
             onPortChange={(pid) => handlePortChange(pid)}
             onRefreshFx={() => void loadExchangeRates(true)}
-            onOpenLogin={() => {
-              setAuthError('');
-              setLoginModalOpen(true);
-            }}
+            onOpenLogin={openAuthModal}
             onSignOut={() => void handleSignOut()}
           />
         )}
@@ -770,6 +1025,12 @@ export default function App() {
               testimonials={testimonials}
               compareIds={compareIds}
               canImportToFirestore={canImportToFirestore}
+              isAuthenticated={isAuthenticated}
+              userProfile={activeProfile}
+              onOpenLogin={openAuthModal}
+              onOpenDashboard={() =>
+                setActiveView(isStaffRole(effectiveRole) ? 'staff_console' : 'customer_portal')
+              }
               onCountryChange={handleCountryChange}
               onPortChange={(pid) => handlePortChange(pid)}
               onSourceModeChange={setCatalogSourceMode}
@@ -996,6 +1257,7 @@ export default function App() {
               teamTasks={cloudTeamTasks}
               teamMessages={cloudTeamMessages}
               salesTargets={cloudSalesTargets}
+              staffInvitations={cloudStaffInvitations}
               landingContent={landingContent}
               testimonials={testimonials}
               onRefreshFx={() => void loadExchangeRates(true)}
@@ -1349,7 +1611,19 @@ export default function App() {
                     prev.map((u) => (u.uid === uid ? { ...u, ...updates } : u))
                   );
                 }
-                notify(`Updated user role to ${updates.role.toUpperCase()}`);
+                notify(
+                  updates.accountStatus === 'suspended'
+                    ? 'Employee account immediately suspended'
+                    : `Updated access profile (${updates.role.toUpperCase()})`
+                );
+              }}
+              onCreateStaffInvitation={async (input) => {
+                await createStaffInvitation(input);
+                notify(`Employee invitation provisioned for ${input.officialEmail}`);
+              }}
+              onRevokeStaffInvitation={async (inviteId) => {
+                await revokeStaffInvitation(inviteId);
+                notify('Employee invitation revoked');
               }}
               onSaveSettings={async (next) => {
                 if (isLiveFirestoreMode) {
@@ -1519,9 +1793,10 @@ export default function App() {
           />
         )}
 
-        {/* Single Universal Login Modal */}
+        {/* Single Universal Login & Sign Up Modal */}
         {loginModalOpen && (
           <UniversalLoginModal
+            initialMode={loginModalMode}
             isAuthenticated={Boolean(firebaseUser)}
             needsProfileCompletion={needsProfileCompletion}
             currentEmail={firebaseUser?.email || ''}
@@ -1529,8 +1804,12 @@ export default function App() {
             userProfile={activeProfile}
             authError={authError}
             isSigningIn={isSigningIn}
+            onEmailSignUp={handleEmailSignUp}
+            onEmailSignIn={handleEmailSignIn}
+            onResetPassword={handleResetPassword}
             onGoogleSignIn={handleUniversalGoogleSignIn}
             onCompleteBuyerProfile={handleCompleteBuyerProfile}
+            onClearError={() => setAuthError('')}
             onClose={() => {
               setLoginModalOpen(false);
               setAuthError('');

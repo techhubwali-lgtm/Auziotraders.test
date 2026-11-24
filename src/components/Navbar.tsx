@@ -6,6 +6,7 @@ import {
   Menu,
   Phone,
   RefreshCw,
+  UserPlus,
   X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
@@ -41,7 +42,7 @@ interface NavbarProps {
   onCountryChange: (countryCode: string) => void;
   onPortChange: (portId: string) => void;
   onRefreshFx: () => void;
-  onOpenLogin: () => void;
+  onOpenLogin: (mode?: 'login' | 'signup') => void;
   onSignOut: () => void;
 }
 
@@ -327,14 +328,24 @@ export function Navbar({
                 </button>
               </div>
             ) : (
-              <button
-                type="button"
-                onClick={onOpenLogin}
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs sm:text-sm font-bold bg-slate-950 hover:bg-slate-800 text-white whitespace-nowrap transition-colors shadow-xs cursor-pointer"
-              >
-                <LogIn className="w-4 h-4 text-amber-400" />
-                <span>Login</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onOpenLogin('login')}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold text-slate-700 hover:text-slate-950 hover:bg-slate-100 border border-slate-200 whitespace-nowrap shrink-0 transition-colors cursor-pointer"
+                >
+                  <LogIn className="w-4 h-4 text-slate-600" />
+                  <span>Login</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onOpenLogin('signup')}
+                  className="inline-flex items-center gap-1.5 px-3.5 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-bold bg-amber-500 hover:bg-amber-400 text-slate-950 whitespace-nowrap shrink-0 transition-colors shadow-xs cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Sign Up</span>
+                </button>
+              </div>
             )}
 
             {/* Mobile & Tablet Hamburger Trigger */}
@@ -372,6 +383,33 @@ export function Navbar({
                 {item.label}
               </button>
             ))}
+
+            {!isAuthenticated && (
+              <div className="pt-3 mt-2 border-t border-slate-100 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenLogin('login');
+                    setMobileMenuOpen(false);
+                  }}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-lg border border-slate-300 text-slate-900 font-semibold text-sm cursor-pointer"
+                >
+                  <LogIn className="w-4 h-4" />
+                  <span>Login</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onOpenLogin('signup');
+                    setMobileMenuOpen(false);
+                  }}
+                  className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4" />
+                  <span>Sign Up</span>
+                </button>
+              </div>
+            )}
 
             <div className="pt-3 mt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 px-2">
               <a

@@ -52,6 +52,7 @@ import { ReportsTasksHubPanel } from '../components/admin/ReportsTasksHubPanel';
 import { UsersPermissionsPanel } from '../components/admin/UsersPermissionsPanel';
 import { OFFICIAL_LOGO_URL } from '../data/landingDefaults';
 import {
+  canViewCompanyProfit,
   hasModulePermission,
   isStaffRole,
   ROLE_METADATA,
@@ -63,11 +64,13 @@ import {
   TRADE_MILESTONE_ORDER,
 } from '../data/ports';
 import type {
+  AccountStatus,
   AdminModuleKey,
   AuditLogEntry,
   CompanySettings,
   CurrencyCode,
   CustomerTestimonial,
+  DesignationLevel,
   ExportDocType,
   ExportDocument,
   ExportOrder,
@@ -86,6 +89,7 @@ import type {
   SalesTarget,
   SourcingOption,
   SourcingRequest,
+  StaffInvitation,
   TeamChannelId,
   TeamChannelMessage,
   TeamTask,
@@ -136,6 +140,7 @@ interface StaffConsoleViewProps {
   teamTasks: TeamTask[];
   teamMessages: TeamChannelMessage[];
   salesTargets: SalesTarget[];
+  staffInvitations: StaffInvitation[];
   landingContent: LandingPageContent;
   testimonials: CustomerTestimonial[];
   onRefreshFx: () => void;
@@ -207,9 +212,18 @@ interface StaffConsoleViewProps {
       assignedRepName: string;
       assignedRepEmail: string;
       department?: string;
+      designationLevel?: DesignationLevel;
+      employeeCode?: string;
+      reportingManagerName?: string;
+      accountStatus?: AccountStatus;
+      twoFactorRequired?: boolean;
       permissions?: RolePermissionsMap;
     }
   ) => Promise<void>;
+  onCreateStaffInvitation: (
+    input: Omit<StaffInvitation, 'id' | 'status' | 'acceptedByUid' | 'createdAt' | 'updatedAt'>
+  ) => Promise<void>;
+  onRevokeStaffInvitation: (inviteId: string) => Promise<void>;
   onCreateFinanceRecord: (
     input: Omit<FinanceRecord, 'id' | 'createdAt' | 'updatedAt'>
   ) => Promise<void>;
@@ -274,6 +288,7 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
     teamTasks,
     teamMessages,
     salesTargets,
+    staffInvitations,
     landingContent,
     testimonials,
     onRefreshFx,
@@ -290,6 +305,8 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
     onToggleDocVisibility,
     onDeleteDocument,
     onUpdateUserRole,
+    onCreateStaffInvitation,
+    onRevokeStaffInvitation,
     onCreateFinanceRecord,
     onUpdateFinanceStatus,
     onDeleteFinanceRecord,
@@ -713,6 +730,41 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
     });
   }, [vehicles, invSearch, invStatusFilter]);
 
+  // Immediate Account Suspension Lockout
+  if (staffProfile?.accountStatus === 'suspended') {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white border border-red-200 rounded-2xl p-8 text-center space-y-5 shadow-sm">
+          <div className="w-12 h-12 rounded-xl bg-red-600 text-white flex items-center justify-center mx-auto">
+            <AlertTriangle className="w-6 h-6" />
+          </div>
+          <h1 className="text-xl font-bold text-slate-950">Account Access Suspended</h1>
+          <p className="text-sm text-slate-600">
+            Your Auzio Traders employee account has been suspended by Administration. All internal
+            dashboard and database permissions have been revoked.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2.5 justify-center">
+            <button
+              type="button"
+              onClick={onSignOut}
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-slate-950 rounded-lg hover:bg-slate-800 cursor-pointer"
+            >
+              <LogOut className="w-4 h-4" />
+              Sign Out
+            </button>
+            <button
+              type="button"
+              onClick={onExitConsole}
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 cursor-pointer"
+            >
+              Return to Website
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Restricted Fallback for non-staff visitors/customers
   if (!isAuthorizedStaff) {
     return (
@@ -1028,9 +1080,11 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
 
         {/* Active Module Content */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1600px] w-full mx-auto">
-          {/* 1. EXECUTIVE DASHBOARD */}
+          {/* 1. ROLE-TAILORED EXECUTIVE / DEPARTMENT DASHBOARD */}
           {activeSection === 'dashboard' && (
             <ExecutiveDashboardPanel
+              role={role}
+              staffProfile={staffProfile}
               currency={currency}
               fxRates={fxRates}
               vehicles={vehicles}
@@ -1040,6 +1094,7 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
               orders={orders}
               inquiries={inquiries}
               financeRecords={financeRecords}
+              hrEmployees={hrEmployees}
               leaveRequests={hrLeaveRequests}
               teamTasks={teamTasks}
               onNavigateSection={(sec) => setActiveSection(sec as ConsoleSection)}
@@ -1047,7 +1102,7 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
                 setAiPreset({
                   tool: 'daily_report',
                   prompt:
-                    'Generate today’s executive Daily Business Report covering revenue, pending quotations, shipping pipeline, and top 3 priorities.',
+                    'Generate today’s Daily Business Report covering pending quotations, shipping pipeline, and top 3 priorities.',
                 });
                 setActiveSection('ai');
               }}
@@ -1631,6 +1686,105 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
                 <div className="lg:col-span-8 space-y-6">
                   {selectedOrder ? (
                     <>
+                      {/* 9-Step Cross-Department Collaboration Workflow on One Unified Order Record */}
+                      {(() => {
+                        const milestoneStepMap: Record<TradeOrderMilestone, number> = {
+                          request_received: 0,
+                          options_prepared: 1,
+                          quotation_sent: 1,
+                          customer_approved: 2,
+                          bid_placed: 4,
+                          vehicle_purchased: 4,
+                          payment_pending: 3,
+                          payment_received: 3,
+                          vehicle_in_yard: 5,
+                          export_docs_ready: 5,
+                          shipment_booked: 6,
+                          shipped: 6,
+                          arrived_port: 7,
+                          completed: 8,
+                        };
+                        const activeCollabIdx = milestoneStepMap[selectedOrder.milestone] ?? 0;
+                        const collabSteps = [
+                          { step: 1, dept: 'Customer', label: 'Request' },
+                          { step: 2, dept: 'Sales Exec', label: 'Quotation' },
+                          { step: 3, dept: 'Sales Mgr', label: 'Approval' },
+                          { step: 4, dept: 'Accounts', label: 'Invoice & TT' },
+                          { step: 5, dept: 'Purchasing', label: 'Auction Buy' },
+                          { step: 6, dept: 'Operations', label: 'Inspect & Docs' },
+                          { step: 7, dept: 'Logistics', label: 'Vessel & B/L' },
+                          { step: 8, dept: 'Customer', label: 'Track & Docs' },
+                          { step: 9, dept: 'Owner', label: 'Profit Audit' },
+                        ];
+                        const directCostUsd =
+                          (selectedOrder.fobUsd || 0) +
+                          (selectedOrder.freightUsd || 0) +
+                          (selectedOrder.inspectionUsd || 0) +
+                          (selectedOrder.insuranceUsd || 0);
+                        const orderMarginUsd = Math.max(
+                          0,
+                          (selectedOrder.totalCifUsd || 0) - directCostUsd
+                        );
+                        const showProfit = canViewCompanyProfit(role, staffProfile);
+
+                        return (
+                          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div>
+                                <div className="text-xs font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">
+                                  Cross-Department Collaboration Workflow
+                                </div>
+                                <div className="text-xs text-slate-500 dark:text-slate-400">
+                                  All departments collaborate on one single live order record (
+                                  {selectedOrder.orderNumber})
+                                </div>
+                              </div>
+                              {showProfit ? (
+                                <div className="px-3 py-1.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 text-xs">
+                                  <span className="text-emerald-700 dark:text-emerald-300 font-semibold">
+                                    Est. Net Margin (Owner/Accounts):{' '}
+                                  </span>
+                                  <span className="font-mono font-bold text-emerald-900 dark:text-emerald-200">
+                                    {fmt(orderMarginUsd)}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-600 dark:text-slate-300">
+                                  <Lock className="w-3.5 h-3.5 text-slate-500" />
+                                  Profit Restricted (Owner &amp; Accounts Only)
+                                </div>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-3 sm:grid-cols-9 gap-1.5">
+                              {collabSteps.map((s, idx) => {
+                                const done = idx < activeCollabIdx;
+                                const current = idx === activeCollabIdx;
+                                return (
+                                  <div
+                                    key={s.step}
+                                    className={`p-2 rounded-lg border text-center transition-colors ${
+                                      current
+                                        ? 'bg-amber-500 border-amber-500 text-slate-950'
+                                        : done
+                                        ? 'bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/60 text-emerald-900 dark:text-emerald-300'
+                                        : 'bg-slate-50 dark:bg-slate-950 border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400'
+                                    }`}
+                                  >
+                                    <div className="text-[10px] font-mono font-bold">
+                                      {done ? '✓' : s.step}. {s.dept}
+                                    </div>
+                                    <div className="text-[10px] font-semibold truncate mt-0.5">
+                                      {s.label}
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        );
+                      })()}
+
                       <form
                         onSubmit={async (e) => {
                           e.preventDefault();
@@ -2218,13 +2372,18 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
             />
           )}
 
-          {/* 14. USERS, ROLES & GRANULAR PERMISSIONS */}
+          {/* 14. USERS, ROLES, INVITATIONS & GRANULAR PERMISSIONS */}
           {activeSection === 'users' && (
             <UsersPermissionsPanel
               users={users}
+              staffInvitations={staffInvitations}
               currentUserUid={staffProfile?.uid}
+              currentUserEmail={staffProfile?.email}
+              canCreate={can('users', 'create') || role === 'admin' || role === 'management'}
               canEdit={can('users', 'edit')}
               onUpdateUser={onUpdateUserRole}
+              onCreateInvitation={onCreateStaffInvitation}
+              onRevokeInvitation={onRevokeStaffInvitation}
             />
           )}
 
