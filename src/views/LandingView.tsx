@@ -318,35 +318,45 @@ export function LandingView({
       )}
 
       {/* =====================================================================
-          SECTION 1: HERO SECTION (Two-Column Automotive Export Showcase)
+          SECTION 1: HERO SECTION (Full-Bleed Cinematic Export Showcase)
       ====================================================================== */}
       <section className="relative bg-slate-950 text-white overflow-hidden">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12 sm:py-16 lg:py-20">
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-center">
-            {/* Left Column: Powerful SEO Copy & Primary CTAs */}
-            <div className="lg:col-span-6 space-y-5">
-              <div className="text-xs sm:text-sm font-bold uppercase tracking-[0.18em] text-amber-400">
-                {landingContent.heroSecondaryHeadline}
+        {/* Full-Bleed Automotive & Yokohama Port Backdrop */}
+        <div className="absolute inset-0">
+          <img
+            src={landingContent.heroImageUrl || LANDING_MEDIA.yard}
+            alt="Japanese used vehicles staged at Yokohama export port beside international Ro-Ro car carrier ship"
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover object-center auzio-hero-zoom"
+          />
+          <div className="absolute inset-0 bg-gradient-to-r from-slate-950/95 via-slate-950/80 to-slate-950/45" />
+          <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-slate-950/45" />
+        </div>
+
+        {/* Main Hero Content */}
+        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-14 pb-12 sm:pt-20 sm:pb-16 lg:pt-24 lg:pb-20">
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 lg:gap-12 items-end">
+            {/* Left Column: Commanding Editorial Copy & Focused Actions */}
+            <div className="lg:col-span-7 space-y-6">
+              <div className="inline-flex items-center gap-3 text-xs sm:text-sm font-semibold tracking-wide text-amber-400">
+                <span className="w-8 h-px bg-amber-400 shrink-0" aria-hidden="true" />
+                <span>{landingContent.heroSecondaryHeadline}</span>
               </div>
 
-              <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight leading-[1.1] text-white">
+              <h1 className="text-3xl sm:text-5xl lg:text-[3.35rem] font-extrabold tracking-tight leading-[1.06] text-white [text-wrap:balance] max-w-2xl">
                 {landingContent.heroHeadline}
               </h1>
 
-              <p className="text-base sm:text-lg text-slate-200 leading-relaxed">
+              <p className="text-base sm:text-lg text-slate-200/95 leading-relaxed max-w-xl">
                 {landingContent.heroDescription}
               </p>
 
-              <p className="text-sm text-slate-400 leading-relaxed border-t border-slate-800 pt-4">
-                {landingContent.heroProblemSolution}
-              </p>
-
-              {/* Hero CTAs */}
-              <div className="flex flex-wrap items-center gap-3 pt-2">
+              {/* Focused CTA Hierarchy: 1 Primary + 1 Secondary + 1 Quiet Action Link */}
+              <div className="flex flex-wrap items-center gap-3.5 pt-2">
                 <button
                   type="button"
                   onClick={() => jumpToCatalog('curated')}
-                  className="inline-flex items-center gap-2 px-6 py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm transition-all shadow-lg shadow-amber-500/15 cursor-pointer"
+                  className="inline-flex items-center gap-2.5 px-6 py-3.5 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm transition-colors shadow-lg shadow-amber-500/20 cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <span>Browse Available Stock</span>
                   <ArrowRight className="w-4 h-4" />
@@ -354,7 +364,7 @@ export function LandingView({
                 <button
                   type="button"
                   onClick={() => jumpToCatalog('live_auctions')}
-                  className="inline-flex items-center gap-2 px-5 py-3.5 rounded-xl bg-white/10 hover:bg-white/15 border border-white/20 text-white font-semibold text-sm transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-2 px-5 py-3.5 rounded-lg bg-white/10 hover:bg-white/18 backdrop-blur-md border border-white/20 text-white font-semibold text-sm transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <Gavel className="w-4 h-4 text-amber-400" />
                   <span>Explore Live Auctions</span>
@@ -362,90 +372,126 @@ export function LandingView({
                 <button
                   type="button"
                   onClick={onOpenSourcingWizard}
-                  className="inline-flex items-center gap-2 px-5 py-3.5 rounded-xl bg-transparent hover:bg-slate-900 border border-slate-700 text-slate-200 hover:text-white font-semibold text-sm transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-2 py-2 text-sm font-semibold text-slate-200 hover:text-amber-300 transition-colors cursor-pointer whitespace-nowrap shrink-0"
                 >
                   <span>Request a Vehicle</span>
+                  <ArrowRight className="w-3.5 h-3.5" />
                 </button>
-              </div>
-
-              {/* Direct Home Page Account Login & Sign Up Access */}
-              <div className="pt-3 border-t border-slate-800/80 flex flex-wrap items-center gap-x-4 gap-y-2 text-xs sm:text-sm text-slate-300">
-                {isAuthenticated ? (
-                  <>
-                    <span>
-                      Signed in as{' '}
-                      <strong className="text-white">
-                        {userProfile?.displayName || 'Member'}
-                      </strong>
-                    </span>
-                    <button
-                      type="button"
-                      onClick={onOpenDashboard}
-                      className="inline-flex items-center gap-1.5 font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer whitespace-nowrap"
-                    >
-                      <LayoutDashboard className="w-4 h-4" />
-                      <span>Open My Dashboard</span>
-                      <ArrowRight className="w-3.5 h-3.5" />
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span className="text-slate-400">Buyer, Dealer, or Team Member?</span>
-                    <div className="flex items-center gap-3">
-                      <button
-                        type="button"
-                        onClick={() => onOpenLogin('login')}
-                        className="inline-flex items-center gap-1.5 font-semibold text-white hover:text-amber-400 transition-colors cursor-pointer whitespace-nowrap"
-                      >
-                        <LogIn className="w-3.5 h-3.5 text-amber-400" />
-                        <span>Login</span>
-                      </button>
-                      <span className="text-slate-600" aria-hidden="true">
-                        ·
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => onOpenLogin('signup')}
-                        className="inline-flex items-center gap-1.5 font-bold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer whitespace-nowrap"
-                      >
-                        <UserPlus className="w-3.5 h-3.5" />
-                        <span>Create Free Account (Sign Up)</span>
-                      </button>
-                    </div>
-                  </>
-                )}
               </div>
             </div>
 
-            {/* Right Column: High-Craft Automotive & Ro-Ro Port Visual */}
-            <div className="lg:col-span-6">
-              <div className="relative rounded-2xl overflow-hidden border border-slate-800 shadow-2xl bg-slate-900">
-                <div className="aspect-[16/10] overflow-hidden">
-                  <img
-                    src={landingContent.heroImageUrl || LANDING_MEDIA.yard}
-                    alt="Japanese used vehicles staged at Yokohama export port beside international Ro-Ro car carrier ship"
-                    className="w-full h-full object-cover auzio-hero-zoom"
-                  />
+            {/* Right Column: Sleek Translucent Export Corridor & Account Access Card */}
+            <div className="lg:col-span-5">
+              <div className="rounded-2xl bg-slate-950/75 backdrop-blur-md border border-white/15 p-6 shadow-2xl space-y-5">
+                <div className="flex items-start justify-between gap-4 border-b border-white/10 pb-4">
+                  <div>
+                    <div className="text-xs font-medium text-slate-400">Active Export Corridor</div>
+                    <div className="text-base font-bold text-white mt-0.5">
+                      Japan &rarr; {activePort.name}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      document
+                        .getElementById('shipping-network')
+                        ?.scrollIntoView({ behavior: 'smooth' })
+                    }
+                    className="text-xs font-semibold text-amber-400 hover:text-amber-300 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+                  >
+                    Change Port
+                  </button>
                 </div>
-                <div className="bg-slate-900/95 border-t border-slate-800 px-5 py-4 grid grid-cols-3 gap-4 text-xs">
+
+                <dl className="grid grid-cols-2 gap-x-5 gap-y-4 text-xs">
                   <div>
-                    <div className="text-slate-400 text-[11px]">Export Hub</div>
-                    <div className="font-bold text-white mt-0.5">Yokohama · Nagoya</div>
+                    <dt className="text-slate-400">Departure Hubs</dt>
+                    <dd className="font-semibold text-white mt-1">Yokohama · Nagoya · Kobe</dd>
                   </div>
                   <div>
-                    <div className="text-slate-400 text-[11px]">Active Port Selected</div>
-                    <div className="font-bold text-amber-400 mt-0.5 truncate">
-                      {activePort.name}
-                    </div>
+                    <dt className="text-slate-400">Destination Country</dt>
+                    <dd className="font-semibold text-white mt-1 truncate">{activeCountry.name}</dd>
                   </div>
                   <div>
-                    <div className="text-slate-400 text-[11px]">Pricing Basis</div>
-                    <div className="font-bold text-white mt-0.5">
+                    <dt className="text-slate-400">Pricing Basis</dt>
+                    <dd className="font-semibold text-amber-400 mt-1 tabular-nums">
                       FOB &amp; Live CIF ({currency})
-                    </div>
+                    </dd>
                   </div>
+                  <div>
+                    <dt className="text-slate-400">Pre-Export Checks</dt>
+                    <dd className="font-semibold text-white mt-1">JEVIC · QISJ · Auction Sheet</dd>
+                  </div>
+                </dl>
+
+                {/* Account Login & Sign Up / Active Dashboard Access */}
+                <div className="pt-4 border-t border-white/10">
+                  {isAuthenticated ? (
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-slate-400">Signed in as</span>
+                        <span className="font-semibold text-white truncate max-w-[60%]">
+                          {userProfile?.displayName || 'Member'}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={onOpenDashboard}
+                        className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg bg-white hover:bg-slate-100 text-slate-950 font-bold text-xs transition-colors cursor-pointer whitespace-nowrap"
+                      >
+                        <LayoutDashboard className="w-4 h-4" />
+                        <span>Open My Dashboard</span>
+                        <ArrowRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <div className="text-xs text-slate-300">
+                        Buyer, Dealer, or Team Portal Access
+                      </div>
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <button
+                          type="button"
+                          onClick={() => onOpenLogin('login')}
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg bg-white/10 hover:bg-white/18 border border-white/15 text-white font-semibold text-xs transition-colors cursor-pointer whitespace-nowrap"
+                        >
+                          <LogIn className="w-3.5 h-3.5 text-amber-400" />
+                          <span>Login</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onOpenLogin('signup')}
+                          className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-lg bg-white hover:bg-slate-100 text-slate-950 font-bold text-xs transition-colors cursor-pointer whitespace-nowrap"
+                        >
+                          <UserPlus className="w-3.5 h-3.5" />
+                          <span>Sign Up</span>
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Clean Architectural Bottom Trust Bar */}
+        <div className="relative border-t border-white/10 bg-slate-950/65 backdrop-blur-sm">
+          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 text-xs text-slate-300">
+              <span>Licensed Japanese Vehicle Exporter</span>
+              <span className="hidden sm:inline text-slate-600" aria-hidden="true">
+                ·
+              </span>
+              <span>Direct USS, TAA, HAA &amp; JU Auction Access</span>
+              <span className="hidden sm:inline text-slate-600" aria-hidden="true">
+                ·
+              </span>
+              <span>Transparent FOB &amp; CIF Invoices</span>
+              <span className="hidden sm:inline text-slate-600" aria-hidden="true">
+                ·
+              </span>
+              <span>Worldwide Ro-Ro &amp; Container Logistics</span>
             </div>
           </div>
         </div>
