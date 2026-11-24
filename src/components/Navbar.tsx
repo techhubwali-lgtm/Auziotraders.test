@@ -1,337 +1,395 @@
 import {
-  Building2,
-  GitCompare,
-  Info,
-  Lock,
+  LayoutDashboard,
+  LogIn,
   LogOut,
+  Mail,
   Menu,
+  Phone,
+  RefreshCw,
   X,
 } from 'lucide-react';
-import { useState } from 'react';
-import { ALL_CURRENCIES, GLOBAL_PORTS } from '../data/ports';
-import { EN_COPY } from '../i18n/en';
+import { useMemo, useState } from 'react';
+import { WORLD_CURRENCIES } from '../data/currencies';
+import { OFFICIAL_LOGO_URL } from '../data/landingDefaults';
+import { WORLD_COUNTRIES, getWorldCountryByCode } from '../data/worldCountriesPorts';
 import type {
   AppView,
   CurrencyCode,
-  LoginPortalType,
+  LandingPageContent,
+  LiveExchangeRateState,
+  UserProfile,
   UserRole,
 } from '../types/portal';
+import { SearchableSelect, type SearchableOption } from './SearchableSelect';
 
 interface NavbarProps {
   activeView: AppView;
-  onNavigate: (view: AppView) => void;
   currency: CurrencyCode;
-  onCurrencyChange: (c: CurrencyCode) => void;
+  selectedCountryCode: string;
   selectedPortId: string;
+  liveFx: LiveExchangeRateState;
+  landingContent: LandingPageContent;
+  isAuthenticated: boolean;
+  userRole: UserRole;
+  userProfile: UserProfile | null;
+  onNavigateView: (
+    view: AppView,
+    opts?: { sourceMode?: 'curated' | 'live_auctions'; anchor?: string }
+  ) => void;
+  onCurrencyChange: (code: CurrencyCode) => void;
+  onCountryChange: (countryCode: string) => void;
   onPortChange: (portId: string) => void;
-  compareCount: number;
-  onOpenCompare: () => void;
-  onOpenWorkflowStatus: () => void;
-  effectiveRole: UserRole;
-  activeUserLabel: string;
-  isSignedInFirebase: boolean;
-  onOpenLoginPortal: (portal: LoginPortalType) => void;
-  onDemoRoleSwitch: (role: UserRole, customerId?: string) => void;
+  onRefreshFx: () => void;
+  onOpenLogin: () => void;
   onSignOut: () => void;
+}
+
+function formatFxTimestamp(iso: string | null): string {
+  if (!iso) return 'Unavailable (USD base)';
+  try {
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return iso;
+    return d.toLocaleString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    });
+  } catch {
+    return iso;
+  }
 }
 
 export function Navbar({
   activeView,
-  onNavigate,
   currency,
-  onCurrencyChange,
+  selectedCountryCode,
   selectedPortId,
+  liveFx,
+  landingContent,
+  isAuthenticated,
+  userRole,
+  userProfile,
+  onNavigateView,
+  onCurrencyChange,
+  onCountryChange,
   onPortChange,
-  compareCount,
-  onOpenCompare,
-  onOpenWorkflowStatus,
-  effectiveRole,
-  activeUserLabel,
-  isSignedInFirebase,
-  onOpenLoginPortal,
-  onDemoRoleSwitch,
+  onRefreshFx,
+  onOpenLogin,
   onSignOut,
 }: NavbarProps) {
-  const [mobileOpen, setMobileOpen] = useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  const isStaff =
-    effectiveRole === 'sales' ||
-    effectiveRole === 'operations' ||
-    effectiveRole === 'admin';
-  const isCustomer = effectiveRole === 'customer';
+  const selectedCountry = useMemo(
+    () => getWorldCountryByCode(selectedCountryCode),
+    [selectedCountryCode]
+  );
 
-  const navLinks: { id: AppView; label: string }[] = [
-    { id: 'catalog', label: EN_COPY.nav.browseStock },
-    { id: 'shipping', label: EN_COPY.nav.shippingRates },
-    { id: 'how_to_buy', label: EN_COPY.nav.howToBuy },
-    { id: 'track', label: EN_COPY.nav.trackOrder },
+  const currencyOptions = useMemo<SearchableOption[]>(() => {
+    return WORLD_CURRENCIES.map((c) => {
+      const rate = liveFx.rates[c.code];
+      const hasRate = c.code === 'USD' || (typeof rate === 'number' && rate > 0);
+      return {
+        value: c.code,
+        label: `${c.code} (${c.symbol})`,
+        sublabel: hasRate
+          ? `${c.name}${c.code !== 'USD' && rate ? ` · 1 USD = ${rate.toFixed(rate >= 100 ? 1 : 2)} ${c.code}` : ''}`
+          : `${c.name} · Live FX unavailable (shows USD)`,
+        badge: c.popular ? 'Popular' : undefined,
+        badgeTone: 'neutral',
+        searchText: `${c.code} ${c.name} ${c.symbol}`,
+      };
+    });
+  }, [liveFx.rates]);
+
+  const countryOptions = useMemo<SearchableOption[]>(() => {
+    return WORLD_COUNTRIES.map((c) => ({
+      value: c.code,
+      label: c.name,
+      sublabel: `${c.region} · ${c.ports.length} port${c.ports.length === 1 ? '' : 's'}`,
+      badge: c.supportedShipping ? 'Instant CIF' : 'Custom Quote',
+      badgeTone: c.supportedShipping ? 'verified' : 'neutral',
+      searchText: `${c.name} ${c.code} ${c.region}`,
+    }));
+  }, []);
+
+  const portOptions = useMemo<SearchableOption[]>(() => {
+    return selectedCountry.ports.map((p) => ({
+      value: p.id,
+      label: `${p.name}`,
+      sublabel: `UN/LOCODE: ${p.unLocode}${p.corridorNote ? ` · ${p.corridorNote}` : ''}`,
+      badge: p.rateAvailable ? 'Published Tariff' : 'Quote Required',
+      badgeTone: p.rateAvailable ? 'verified' : 'neutral',
+      searchText: `${p.name} ${p.unLocode} ${p.countryName}`,
+    }));
+  }, [selectedCountry]);
+
+  const isStaffUser =
+    isAuthenticated &&
+    ['sales', 'accounts', 'operations', 'management', 'admin'].includes(userRole);
+
+  const dashboardView: AppView = isStaffUser ? 'staff_console' : 'customer_portal';
+
+  const fxFooterNote = liveFx.ok
+    ? `Live FX updated: ${formatFxTimestamp(liveFx.updatedAt)} · Official invoices billed in USD.`
+    : liveFx.message || 'Live FX feed unavailable. Prices shown in verified USD.';
+
+  // Streamlined 5-item navigation combining:
+  // 1. Home (Home + Browse Stock + Live Auctions unified)
+  // 2. Services & How to Buy (Our Services + How to Buy + About Us unified)
+  // 3. Testimonials
+  // 4. Track Order
+  // 5. Contact Us
+  const navLinks: Array<{
+    id: string;
+    label: string;
+    active: boolean;
+    onClick: () => void;
+  }> = [
+    {
+      id: 'home',
+      label: 'Home',
+      active: activeView === 'home' || activeView === 'catalog',
+      onClick: () => onNavigateView('home'),
+    },
+    {
+      id: 'guide-services-about',
+      label: 'Services & How to Buy',
+      active: activeView === 'how_to_buy',
+      onClick: () => onNavigateView('how_to_buy'),
+    },
+    {
+      id: 'testimonials',
+      label: 'Testimonials',
+      active: false,
+      onClick: () => onNavigateView('home', { anchor: 'testimonials' }),
+    },
+    {
+      id: 'track',
+      label: 'Track Order',
+      active: activeView === 'track',
+      onClick: () => onNavigateView('track'),
+    },
+    {
+      id: 'contact',
+      label: 'Contact Us',
+      active: false,
+      onClick: () => onNavigateView('home', { anchor: 'contact' }),
+    },
   ];
 
-  if (isCustomer) {
-    navLinks.push({ id: 'customer_portal', label: EN_COPY.nav.dealerPortal });
-  }
-  if (isStaff) {
-    navLinks.push({ id: 'staff_console', label: EN_COPY.nav.staffConsole });
-  }
-
-  const handleNav = (view: AppView) => {
-    onNavigate(view);
-    setMobileOpen(false);
-  };
-
   return (
-    <header className="no-print sticky top-0 z-40">
-      {/* Trade Utility Top Bar: Currency, Port, Transparency Disclosure, Role Switcher, Dual Login Entry Points */}
+    <header className="sticky top-0 z-50 no-print shadow-xs">
+      {/* Top Utility Bar: Currency, Country, Port & Verified Contact */}
       <div className="bg-slate-950 text-slate-200 border-b border-slate-800">
-        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-wrap items-center justify-between gap-3 text-xs">
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400 hidden sm:inline">Currency:</span>
-              <select
-                aria-label="Display currency"
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-wrap items-center justify-between gap-2 text-xs">
+          {/* Contact Information */}
+          <div className="hidden md:flex items-center gap-4 text-slate-300">
+            <a
+              href={`tel:${landingContent.contactPhone.replace(/\s+/g, '')}`}
+              className="inline-flex items-center gap-1.5 hover:text-amber-400 transition-colors whitespace-nowrap"
+            >
+              <Phone className="w-3.5 h-3.5 text-amber-500" />
+              <span className="font-mono text-[11px]">{landingContent.contactPhone}</span>
+            </a>
+            <a
+              href={`mailto:${landingContent.contactEmail}`}
+              className="inline-flex items-center gap-1.5 hover:text-amber-400 transition-colors whitespace-nowrap"
+            >
+              <Mail className="w-3.5 h-3.5 text-amber-500" />
+              <span>{landingContent.contactEmail}</span>
+            </a>
+          </div>
+
+          {/* Global Currency, Country & Destination Port Selectors */}
+          <div className="flex items-center gap-2 flex-wrap w-full md:w-auto justify-between md:justify-end">
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <SearchableSelect
+                ariaLabel="Select global currency"
                 value={currency}
-                onChange={(e) => onCurrencyChange(e.target.value as CurrencyCode)}
-                className="bg-slate-900 text-white border border-slate-700 rounded px-2 py-1 font-mono text-xs focus:outline-none focus:border-amber-500 cursor-pointer"
-              >
-                {ALL_CURRENCIES.map((c) => (
-                  <option key={c} value={c}>
-                    {c}
-                  </option>
-                ))}
-              </select>
-            </div>
+                options={currencyOptions}
+                onChange={onCurrencyChange}
+                searchPlaceholder="Search currency, code, symbol..."
+                variant="dark"
+                align="right"
+                compact
+                footerNote={fxFooterNote}
+              />
 
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400 hidden sm:inline">CIF Port:</span>
-              <select
-                aria-label="Destination discharge port"
+              <SearchableSelect
+                ariaLabel="Select destination country"
+                value={selectedCountryCode}
+                options={countryOptions}
+                onChange={onCountryChange}
+                searchPlaceholder="Search all countries..."
+                variant="dark"
+                align="right"
+                triggerPrefix="To:"
+                compact
+              />
+
+              <SearchableSelect
+                ariaLabel="Select destination shipping port"
                 value={selectedPortId}
-                onChange={(e) => onPortChange(e.target.value)}
-                className="bg-slate-900 text-white border border-slate-700 rounded px-2 py-1 text-xs max-w-[190px] sm:max-w-[240px] focus:outline-none focus:border-amber-500 cursor-pointer"
-              >
-                {GLOBAL_PORTS.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.country} — {p.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+                options={portOptions}
+                onChange={onPortChange}
+                searchPlaceholder="Search UN/LOCODE or port..."
+                variant="dark"
+                align="right"
+                triggerPrefix="Port:"
+                compact
+              />
 
-            <button
-              type="button"
-              onClick={onOpenWorkflowStatus}
-              className="hidden lg:inline-flex items-center gap-1 text-slate-300 hover:text-amber-400 transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <Info className="w-3.5 h-3.5 text-amber-500" />
-              Platform & Workflow Status
-            </button>
-          </div>
-
-          {/* Right side: Quick-Demo Switcher + Dual Login Portals */}
-          <div className="hidden md:flex items-center gap-3">
-            <div className="flex items-center gap-1.5">
-              <span className="text-slate-400 text-[11px]">Test Role:</span>
-              <select
-                aria-label="Quick demo role switcher"
-                value={effectiveRole}
-                onChange={(e) => {
-                  const next = e.target.value as UserRole;
-                  onDemoRoleSwitch(next, next === 'customer' ? 'cust-kenya-01' : undefined);
-                }}
-                className="bg-slate-900 text-amber-300 border border-slate-700 rounded px-2 py-1 text-[11px] font-medium focus:outline-none focus:border-amber-500 cursor-pointer"
-              >
-                <option value="visitor">Visitor (Public)</option>
-                <option value="customer">Customer / Dealer (Kenya)</option>
-                <option value="sales">Sales Staff</option>
-                <option value="operations">Operations Staff</option>
-                <option value="admin">Administrator</option>
-              </select>
-            </div>
-
-            <span className="text-slate-700">|</span>
-
-            <button
-              type="button"
-              onClick={() => onOpenLoginPortal('customer')}
-              className="inline-flex items-center gap-1.5 text-slate-200 hover:text-amber-400 font-medium whitespace-nowrap cursor-pointer"
-            >
-              <Building2 className="w-3.5 h-3.5 text-amber-500" />
-              Customer / Dealer Login
-            </button>
-
-            <span className="text-slate-700">·</span>
-
-            <button
-              type="button"
-              onClick={() => onOpenLoginPortal('staff')}
-              className="inline-flex items-center gap-1.5 text-slate-200 hover:text-amber-400 font-medium whitespace-nowrap cursor-pointer"
-            >
-              <Lock className="w-3.5 h-3.5 text-slate-400" />
-              Staff / Admin Login
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Main Header */}
-      <div className="bg-white/95 backdrop-blur border-b border-slate-200">
-        <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-6">
-          {/* Zone 1: Brand Wordmark */}
-          <button
-            type="button"
-            onClick={() => handleNav('catalog')}
-            className="text-lg font-extrabold tracking-tight text-slate-950 whitespace-nowrap shrink-0 cursor-pointer hover:text-amber-700 transition-colors"
-          >
-            {EN_COPY.brandName}
-          </button>
-
-          {/* Zone 2: Clean Single-Line Nav Links */}
-          <nav
-            aria-label="Primary navigation"
-            className="hidden lg:flex items-center gap-7 text-sm font-medium"
-          >
-            {navLinks.map((item) => {
-              const isActive = activeView === item.id;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  onClick={() => handleNav(item.id)}
-                  className={`relative py-1 whitespace-nowrap shrink-0 transition-colors cursor-pointer ${
-                    isActive
-                      ? 'text-slate-950 font-semibold'
-                      : 'text-slate-600 hover:text-slate-950'
-                  }`}
-                >
-                  {item.label}
-                  {isActive && (
-                    <span className="absolute left-0 right-0 -bottom-[19px] h-0.5 bg-amber-600" />
-                  )}
-                </button>
-              );
-            })}
-          </nav>
-
-          {/* Zone 3: Active Workspace / Dual Auth CTA */}
-          <div className="flex items-center gap-2.5 shrink-0">
-            {compareCount > 0 && (
               <button
                 type="button"
-                onClick={onOpenCompare}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-900 bg-slate-100 border border-slate-300 rounded-lg hover:bg-slate-200 cursor-pointer whitespace-nowrap"
+                onClick={onRefreshFx}
+                title={
+                  liveFx.ok
+                    ? `Live FX updated ${formatFxTimestamp(liveFx.updatedAt)}. Click to refresh.`
+                    : 'Refresh live exchange rates'
+                }
+                aria-label="Refresh live exchange rates"
+                className="p-1.5 rounded-md border border-slate-700 bg-slate-900 text-slate-300 hover:text-amber-400 hover:border-slate-500 transition-colors cursor-pointer"
               >
-                <GitCompare className="w-3.5 h-3.5 text-amber-700" />
-                Compare ({compareCount})
+                <RefreshCw className={`w-3.5 h-3.5 ${liveFx.loading ? 'animate-spin' : ''}`} />
               </button>
-            )}
-
-            {effectiveRole !== 'visitor' ? (
-              <div className="hidden md:flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() =>
-                    handleNav(isStaff ? 'staff_console' : 'customer_portal')
-                  }
-                  className="px-3.5 py-2 text-xs font-semibold text-white bg-slate-950 rounded-lg hover:bg-slate-800 whitespace-nowrap cursor-pointer"
-                >
-                  {activeUserLabel}
-                </button>
-                <button
-                  type="button"
-                  onClick={onSignOut}
-                  title={isSignedInFirebase ? 'Sign Out' : 'Exit Role Preview'}
-                  className="p-2 text-slate-600 hover:text-red-700 hover:bg-slate-100 rounded-lg cursor-pointer"
-                >
-                  <LogOut className="w-4 h-4" />
-                </button>
-              </div>
-            ) : (
-              <div className="hidden md:flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => onOpenLoginPortal('customer')}
-                  className="px-3.5 py-2 text-xs font-semibold text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  Dealer Portal Login
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onOpenLoginPortal('staff')}
-                  className="px-3 py-2 text-xs font-semibold text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors whitespace-nowrap cursor-pointer"
-                >
-                  Staff Login
-                </button>
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={() => setMobileOpen((p) => !p)}
-              aria-label="Toggle menu"
-              className="lg:hidden inline-flex items-center justify-center w-10 h-10 rounded-lg text-slate-700 hover:bg-slate-100 cursor-pointer"
-            >
-              {mobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Mobile Drawer with BOTH distinct login entry points */}
-      {mobileOpen && (
-        <div className="lg:hidden bg-white border-b border-slate-200 px-4 py-4 space-y-3 shadow-lg">
-          <div className="space-y-1">
+      {/* Main Navigation Bar */}
+      <div className="bg-white/95 backdrop-blur-md border-b border-slate-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-4">
+          {/* Official Brand Logo */}
+          <button
+            type="button"
+            onClick={() => onNavigateView('home')}
+            className="flex items-center gap-2.5 shrink-0 cursor-pointer group focus:outline-none"
+          >
+            <img
+              src={OFFICIAL_LOGO_URL}
+              alt="Auzio Traders official logo"
+              className="w-11 h-11 rounded-full object-cover border border-slate-200 shadow-xs bg-white transition-transform group-hover:scale-[1.03]"
+            />
+            <div className="text-left leading-tight">
+              <div className="text-sm sm:text-base font-extrabold tracking-tight text-slate-950">
+                AUZIO <span className="text-amber-600">TRADERS</span>
+              </div>
+              <div className="text-[10px] font-medium text-slate-500 tracking-wide uppercase">
+                Japan Auto Export
+              </div>
+            </div>
+          </button>
+
+          {/* Desktop Primary Navigation (5 Clean Consolidated Links) */}
+          <nav aria-label="Main navigation" className="hidden lg:flex items-center gap-1">
             {navLinks.map((item) => (
               <button
                 key={item.id}
                 type="button"
-                onClick={() => handleNav(item.id)}
-                className={`w-full text-left px-3 py-2.5 rounded-lg text-sm font-medium cursor-pointer ${
-                  activeView === item.id
-                    ? 'bg-slate-100 text-slate-950 font-semibold'
-                    : 'text-slate-700 hover:bg-slate-50'
+                onClick={item.onClick}
+                className={`px-3.5 py-2 rounded-lg text-sm font-semibold whitespace-nowrap transition-colors cursor-pointer ${
+                  item.active
+                    ? 'text-amber-600 bg-amber-50'
+                    : 'text-slate-700 hover:text-slate-950 hover:bg-slate-100'
                 }`}
               >
                 {item.label}
               </button>
             ))}
-          </div>
+          </nav>
 
-          <div className="pt-3 border-t border-slate-200 space-y-2">
-            <div className="text-[11px] font-semibold text-slate-500 px-1">
-              Account Access Portals
+          {/* Single Universal Login CTA (or authenticated Dashboard + Sign Out) */}
+          <div className="flex items-center gap-2 shrink-0">
+            {isAuthenticated ? (
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => onNavigateView(dashboardView)}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold whitespace-nowrap transition-colors cursor-pointer ${
+                    activeView === dashboardView
+                      ? 'bg-amber-500 text-slate-950'
+                      : 'bg-slate-950 hover:bg-slate-800 text-white'
+                  }`}
+                >
+                  <LayoutDashboard className="w-3.5 h-3.5" />
+                  <span>{userProfile?.displayName?.split(' ')[0] || 'Dashboard'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={onSignOut}
+                  title="Sign out"
+                  aria-label="Sign out"
+                  className="p-2 rounded-lg border border-slate-200 text-slate-600 hover:text-red-700 hover:bg-red-50 transition-colors cursor-pointer"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={onOpenLogin}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs sm:text-sm font-bold bg-slate-950 hover:bg-slate-800 text-white whitespace-nowrap transition-colors shadow-xs cursor-pointer"
+              >
+                <LogIn className="w-4 h-4 text-amber-400" />
+                <span>Login</span>
+              </button>
+            )}
+
+            {/* Mobile & Tablet Hamburger Trigger */}
+            <button
+              type="button"
+              onClick={() => setMobileMenuOpen((prev) => !prev)}
+              aria-label={mobileMenuOpen ? 'Close navigation menu' : 'Open navigation menu'}
+              aria-expanded={mobileMenuOpen}
+              className="lg:hidden p-2 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-100 cursor-pointer"
+            >
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {/* Mobile / Tablet Responsive Navigation Drawer */}
+      {mobileMenuOpen && (
+        <div className="lg:hidden bg-white border-b border-slate-200 shadow-xl">
+          <div className="max-w-7xl mx-auto px-4 py-4 space-y-1">
+            {navLinks.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  item.onClick();
+                  setMobileMenuOpen(false);
+                }}
+                className={`w-full text-left px-3.5 py-2.5 rounded-lg text-sm font-semibold transition-colors cursor-pointer ${
+                  item.active
+                    ? 'bg-amber-50 text-amber-700'
+                    : 'text-slate-700 hover:bg-slate-100 hover:text-slate-950'
+                }`}
+              >
+                {item.label}
+              </button>
+            ))}
+
+            <div className="pt-3 mt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600 px-2">
+              <a
+                href={`tel:${landingContent.contactPhone.replace(/\s+/g, '')}`}
+                className="inline-flex items-center gap-1.5 hover:text-amber-600"
+              >
+                <Phone className="w-3.5 h-3.5 text-amber-600" />
+                <span className="font-mono">{landingContent.contactPhone}</span>
+              </a>
+              <a
+                href={`mailto:${landingContent.contactEmail}`}
+                className="inline-flex items-center gap-1.5 hover:text-amber-600"
+              >
+                <Mail className="w-3.5 h-3.5 text-amber-600" />
+                <span>{landingContent.contactEmail}</span>
+              </a>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                setMobileOpen(false);
-                onOpenLoginPortal('customer');
-              }}
-              className="w-full py-2.5 px-3 text-xs font-semibold text-white bg-amber-600 rounded-lg flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Building2 className="w-4 h-4" />
-              Customer / Dealer Login & Registration
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMobileOpen(false);
-                onOpenLoginPortal('staff');
-              }}
-              className="w-full py-2.5 px-3 text-xs font-semibold text-slate-900 bg-slate-100 border border-slate-300 rounded-lg flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Lock className="w-4 h-4" />
-              Management / Staff / Admin Login
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setMobileOpen(false);
-                onOpenWorkflowStatus();
-              }}
-              className="w-full py-2 px-3 text-xs font-medium text-slate-600 hover:text-slate-950 text-center cursor-pointer"
-            >
-              Platform & Workflow Status
-            </button>
           </div>
         </div>
       )}

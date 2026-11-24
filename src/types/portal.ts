@@ -1,17 +1,15 @@
-export type CurrencyCode =
-  | 'USD'
-  | 'JPY'
-  | 'EUR'
-  | 'AUD'
-  | 'GBP'
-  | 'KES'
-  | 'ZAR'
-  | 'NZD'
-  | 'CAD';
+export type CurrencyCode = string;
 
-export type UserRole = 'visitor' | 'customer' | 'sales' | 'operations' | 'admin';
+export type PersistedUserRole =
+  | 'customer'
+  | 'dealer'
+  | 'sales'
+  | 'accounts'
+  | 'operations'
+  | 'management'
+  | 'admin';
 
-export type PersistedUserRole = 'customer' | 'sales' | 'operations' | 'admin';
+export type UserRole = 'visitor' | PersistedUserRole;
 
 export type LoginPortalType = 'customer' | 'staff';
 
@@ -413,10 +411,13 @@ export interface AuditLogEntry {
 
 export interface ShippingPort {
   id: string;
+  unLocode?: string;
   name: string;
   country: string;
-  region: ShippingRegion;
+  countryCode?: string;
+  region: ShippingRegion | string;
   corridorNote?: string;
+  rateAvailable?: boolean;
   roroRatePerM3Usd: number;
   container20ftUsd: number;
   container40ftUsd: number;
@@ -424,6 +425,36 @@ export interface ShippingPort {
   inspectionFeeUsd: number;
   transitDaysMin: number;
   transitDaysMax: number;
+}
+
+export interface WorldPortOption {
+  id: string;
+  unLocode: string;
+  name: string;
+  countryCode: string;
+  countryName: string;
+  region: string;
+  rateAvailable: boolean;
+  verifiedPortId?: string;
+  corridorNote?: string;
+}
+
+export interface WorldCountryOption {
+  code: string;
+  name: string;
+  region: string;
+  supportedShipping: boolean;
+  ports: WorldPortOption[];
+}
+
+export interface LiveExchangeRateState {
+  ok: boolean;
+  loading: boolean;
+  base: 'USD';
+  rates: Record<string, number>;
+  updatedAt: string | null;
+  provider: string;
+  message?: string;
 }
 
 export interface CifBreakdown {
@@ -437,6 +468,7 @@ export interface CifBreakdown {
   port: ShippingPort;
   shippingMethod: ShippingMethod;
   includeInsurance: boolean;
+  rateAvailable?: boolean;
 }
 
 export interface Inquiry {
@@ -495,6 +527,7 @@ export interface ExchangeRates {
   ZAR: number;
   NZD: number;
   CAD: number;
+  [isoCode: string]: number;
 }
 
 export interface CompanySettings {
@@ -514,7 +547,92 @@ export interface CompanySettings {
   updatedAt?: unknown;
 }
 
+export interface CompanyStatItem {
+  id: string;
+  value: number | null;
+  suffix: string;
+  displayText?: string;
+  label: string;
+  sublabel: string;
+}
+
+export interface LandingServiceItem {
+  id: string;
+  title: string;
+  description: string;
+  ctaLabel: string;
+  ctaTarget: 'catalog' | 'live_auctions' | 'sourcing' | 'shipping' | 'contact' | 'how_to_buy';
+  imageKey: 'auction' | 'inspection' | 'shipping' | 'yard';
+}
+
+export interface FaqItem {
+  id: string;
+  question: string;
+  answer: string;
+}
+
+export interface CustomerTestimonial {
+  id: string;
+  customerName: string;
+  country: string;
+  vehiclePurchased: string;
+  photoUrl: string;
+  rating: number;
+  reviewText: string;
+  verified: boolean;
+  approved: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface LandingPageContent {
+  promoBannerEnabled: boolean;
+  promoBannerText: string;
+  promoBannerCtaLabel: string;
+  heroHeadline: string;
+  heroSecondaryHeadline: string;
+  heroDescription: string;
+  heroProblemSolution: string;
+  heroImageUrl: string;
+  stats: CompanyStatItem[];
+  services: LandingServiceItem[];
+  aboutHeadline: string;
+  aboutIntro: string;
+  aboutMission: string;
+  aboutTransparency: string;
+  aboutImageUrl: string;
+  faqs: FaqItem[];
+  contactPhone: string;
+  contactWhatsapp: string;
+  contactEmail: string;
+  contactAddress: string;
+  socialLinks: {
+    facebook: string;
+    instagram: string;
+    youtube: string;
+    linkedin: string;
+  };
+  seoTitle: string;
+  seoDescription: string;
+  updatedAt?: unknown;
+}
+
+export interface QuickSearchCriteria {
+  make?: string;
+  model?: string;
+  yearMin?: string;
+  yearMax?: string;
+  priceRange?: string;
+  bodyType?: string;
+  fuel?: string;
+  transmission?: string;
+  mileageMax?: string;
+  steering?: string;
+  stockType?: 'ALL' | 'auzio_stock' | 'live_auctions' | 'partner_stock';
+}
+
 export type AppView =
+  | 'home'
   | 'catalog'
   | 'shipping'
   | 'how_to_buy'

@@ -25,15 +25,18 @@ import {
   SEED_SOURCING_REQUESTS,
   SEED_VEHICLES,
 } from '../data/seedData';
+import { DEFAULT_LANDING_CONTENT } from '../data/landingDefaults';
 import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import type {
   AuditLogEntry,
   CompanySettings,
   CurrencyCode,
+  CustomerTestimonial,
   ExportDocType,
   ExportDocument,
   ExportOrder,
   Inquiry,
+  LandingPageContent,
   ListingType,
   OrderMessage,
   OrderMilestone,
@@ -425,6 +428,7 @@ export async function getUserProfile(uid: string): Promise<UserProfile | null> {
 export async function registerCustomerProfile(input: {
   uid: string;
   email: string;
+  accountType?: 'customer' | 'dealer';
   displayName: string;
   companyName: string;
   country: string;
@@ -433,11 +437,12 @@ export async function registerCustomerProfile(input: {
   consigneeAddress: string;
 }): Promise<UserProfile> {
   const path = `users/${input.uid}`;
+  const chosenRole: PersistedUserRole = input.accountType === 'dealer' ? 'dealer' : 'customer';
   const payload: UserProfile = {
     uid: input.uid,
     email: input.email.trim().slice(0, 120),
     displayName: input.displayName.trim().slice(0, 100),
-    role: 'customer',
+    role: chosenRole,
     companyName: input.companyName.trim().slice(0, 120),
     country: input.country.trim().slice(0, 80),
     defaultPortId: input.defaultPortId.trim().slice(0, 64),
@@ -453,11 +458,11 @@ export async function registerCustomerProfile(input: {
   try {
     await setDoc(doc(db, 'users', input.uid), payload);
     void recordAuditLog({
-      actorRole: 'customer',
+      actorRole: chosenRole,
       action: 'customer_registered',
       targetType: 'user',
       targetId: input.uid,
-      summary: `Registered dealer account for ${payload.companyName || payload.displayName} (${payload.country}).`,
+      summary: `Registered ${chosenRole} account for ${payload.companyName || payload.displayName} (${payload.country}).`,
     });
     return payload;
   } catch (error) {
@@ -1433,3 +1438,142 @@ export async function clearSampleTradeData(): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, 'vehicles');
   }
 }
+
+// ---------------------------------------------------------------------------
+// Landing Page CMS & Verified Customer Testimonials
+// ---------------------------------------------------------------------------
+
+export function subscribeLandingContent(
+  onData: (content: LandingPageContent) => void
+): Unsubscribe {
+  const ref = doc(db, 'landingContent', 'public');
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as Partial<LandingPageContent>;
+        onData({
+          ...DEFAULT_LANDING_CONTENT,
+          ...data,
+          stats: Array.isArray(data.stats) && data.stats.length > 0 ? data.stats : DEFAULT_LANDING_CONTENT.stats,
+          services:
+            Array.isArray(data.services) && data.services.length > 0
+              ? data.services
+              : DEFAULT_LANDING_CONTENT.services,
+          faqs: Array.isArray(data.faqs) && data.faqs.length > 0 ? data.faqs : DEFAULT_LANDING_CONTENT.faqs,
+          socialLinks: {
+            ...DEFAULT_LANDING_CONTENT.socialLinks,
+            ...(data.socialLinks || {}),
+          },
+        });
+      } else {
+        onData(DEFAULT_LANDING_CONTENT);
+      }
+    },
+    () => {
+      onData(DEFAULT_LANDING_CONTENT);
+    }
+  );
+}
+
+export async function saveLandingContent(content: LandingPageContent): Promise<void> {
+  try {
+    const { updatedAt: _ignored, ...rest } = content;
+    await setDoc(
+      doc(db, 'landingContent', 'public'),
+      {
+        ...rest,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    void recordAuditLog({
+      actorRole: 'admin',
+      action: 'landing_cms_updated',
+      targetType: 'landingContent',
+      targetId: 'public',
+      summary: 'Updated public landing page CMS content, statistics, FAQs, and SEO settings.',
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'landingContent/public');
+  }
+}
+
+export function subscribeTestimonials(
+  includeUnapproved: boolean,
+  onData: (items: CustomerTestimonial[]) => void
+): Unsubscribe {
+  const q = includeUnapproved
+    ? query(collection(db, 'testimonials'))
+    : query(collection(db, 'testimonials'), where('approved', '==', true));
+
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<CustomerTestimonial, 'id'>),
+        }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      onData(list);
+    },
+    () => {
+      onData([]);
+    }
+  );
+}
+
+export async function saveTestimonial(
+  input: Omit<CustomerTestimonial, 'id' | 'createdAt' | 'updatedAt'>,
+  existingId?: string
+): Promise<string> {
+  const id = existingId || generateDocumentId('rev');
+  try {
+    const payload = {
+      customerName: input.customerName.trim().slice(0, 100),
+      country: input.country.trim().slice(0, 80),
+      vehiclePurchased: input.vehiclePurchased.trim().slice(0, 120),
+      photoUrl: input.photoUrl.trim().slice(0, 500),
+      rating: Math.max(1, Math.min(5, Math.round(input.rating || 5))),
+      reviewText: input.reviewText.trim().slice(0, 1200),
+      verified: Boolean(input.verified),
+      approved: Boolean(input.approved),
+      updatedAt: serverTimestamp(),
+    };
+    if (existingId) {
+      await updateDoc(doc(db, 'testimonials', id), payload);
+    } else {
+      await setDoc(doc(db, 'testimonials', id), {
+        ...payload,
+        createdAt: serverTimestamp(),
+      });
+    }
+    void recordAuditLog({
+      actorRole: 'admin',
+      action: existingId ? 'testimonial_updated' : 'testimonial_created',
+      targetType: 'testimonial',
+      targetId: id,
+      summary: `${existingId ? 'Updated' : 'Published'} customer testimonial from ${payload.customerName} (${payload.country}).`,
+    });
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `testimonials/${id}`);
+  }
+}
+
+export async function deleteTestimonial(testimonialId: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'testimonials', testimonialId));
+    void recordAuditLog({
+      actorRole: 'admin',
+      action: 'testimonial_deleted',
+      targetType: 'testimonial',
+      targetId: testimonialId,
+      summary: `Deleted testimonial ${testimonialId}.`,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `testimonials/${testimonialId}`);
+  }
+}
+

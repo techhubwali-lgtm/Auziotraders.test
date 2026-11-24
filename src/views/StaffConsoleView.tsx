@@ -31,16 +31,19 @@ import {
   TRADE_MILESTONE_META,
   TRADE_MILESTONE_ORDER,
 } from '../data/ports';
+import { AdminCmsPanel } from '../components/AdminCmsPanel';
 import { AdminVehicleModal } from '../components/AdminVehicleModal';
 import { StaffAuctionImportPanel } from '../components/StaffAuctionImportPanel';
 import type {
   AuditLogEntry,
   CompanySettings,
   CurrencyCode,
+  CustomerTestimonial,
   ExportDocType,
   ExportDocument,
   ExportOrder,
   Inquiry,
+  LandingPageContent,
   OrderMessage,
   PersistedUserRole,
   Quotation,
@@ -59,6 +62,7 @@ type StaffTab =
   | 'orders'
   | 'inventory'
   | 'documents'
+  | 'cms'
   | 'audit'
   | 'settings';
 
@@ -142,6 +146,15 @@ interface StaffConsoleViewProps {
       assignedRepEmail: string;
     }
   ) => Promise<void>;
+  landingContent: LandingPageContent;
+  testimonials: CustomerTestimonial[];
+  liveFxRates?: Record<string, number>;
+  onSaveLandingContent: (next: LandingPageContent) => Promise<void>;
+  onSaveTestimonial: (
+    input: Omit<CustomerTestimonial, 'id' | 'createdAt' | 'updatedAt'>,
+    existingId?: string
+  ) => Promise<void>;
+  onDeleteTestimonial: (id: string) => Promise<void>;
   onSaveSettings: (next: CompanySettings) => Promise<void>;
   onSeedDatabase: () => Promise<void>;
   onClearSampleData: () => Promise<void>;
@@ -164,6 +177,9 @@ export function StaffConsoleView({
   documents,
   auditLogs,
   inquiries,
+  landingContent,
+  testimonials,
+  liveFxRates,
   onAttachSourcingOption,
   onCreateQuotation,
   onConvertQuoteToOrder,
@@ -176,19 +192,22 @@ export function StaffConsoleView({
   onToggleDocVisibility,
   onDeleteDocument,
   onUpdateUserRole,
+  onSaveLandingContent,
+  onSaveTestimonial,
+  onDeleteTestimonial,
   onSaveSettings,
   onSeedDatabase,
   onClearSampleData,
   onNotify,
   onOpenStaffLogin,
 }: StaffConsoleViewProps) {
-  const isStaff = role === 'sales' || role === 'operations' || role === 'admin';
-  const isAdmin = role === 'admin';
-  const canQuote = role === 'sales' || role === 'admin';
-  const canInventory = role === 'operations' || role === 'admin';
+  const isStaff = ['sales', 'accounts', 'operations', 'management', 'admin'].includes(role);
+  const isAdmin = role === 'admin' || role === 'management';
+  const canQuote = ['sales', 'accounts', 'management', 'admin'].includes(role);
+  const canInventory = ['operations', 'management', 'admin'].includes(role);
 
   const [activeTab, setActiveTab] = useState<StaffTab>('overview');
-  const fmt = (usd: number) => formatMoney(usd, currency, settings.exchangeRates);
+  const fmt = (usd: number) => formatMoney(usd, currency, liveFxRates || settings.exchangeRates);
 
   // Sourcing option composer state
   const [optReqId, setOptReqId] = useState<string>('');
@@ -201,7 +220,10 @@ export function StaffConsoleView({
   const [optNotes, setOptNotes] = useState('');
 
   // Quotation form state
-  const customerUsers = useMemo(() => users.filter((u) => u.role === 'customer'), [users]);
+  const customerUsers = useMemo(
+    () => users.filter((u) => u.role === 'customer' || u.role === 'dealer'),
+    [users]
+  );
   const [qCustomerId, setQCustomerId] = useState(customerUsers[0]?.uid || 'cust-kenya-01');
   const [qSourcingId, setQSourcingId] = useState('');
   const [qVehicleId, setQVehicleId] = useState(vehicles[0]?.id || '');
@@ -305,6 +327,7 @@ export function StaffConsoleView({
     { id: 'orders', label: 'Orders & Vessel Logistics', icon: Package, allowed: true },
     { id: 'inventory', label: 'Inventory Manager', icon: Database, allowed: canInventory },
     { id: 'documents', label: 'Document Manager', icon: FileText, allowed: canInventory },
+    { id: 'cms', label: 'Landing CMS & Reviews', icon: Edit3, allowed: isAdmin },
     { id: 'audit', label: 'Audit Trail', icon: ShieldAlert, allowed: isAdmin },
     { id: 'settings', label: 'System Settings', icon: Settings, allowed: isAdmin },
   ];
@@ -1684,9 +1707,12 @@ export function StaffConsoleView({
                           }
                           className="px-2.5 py-1 text-xs border border-slate-300 rounded-md bg-white"
                         >
-                          <option value="customer">Customer / Dealer</option>
-                          <option value="sales">Sales Staff</option>
-                          <option value="operations">Operations Staff</option>
+                          <option value="customer">Customer</option>
+                          <option value="dealer">Dealer / Wholesale</option>
+                          <option value="sales">Sales Team</option>
+                          <option value="accounts">Accounts Department</option>
+                          <option value="operations">Operations Department</option>
+                          <option value="management">Management</option>
                           <option value="admin">Administrator</option>
                         </select>
                       </td>
@@ -1850,6 +1876,17 @@ export function StaffConsoleView({
             </div>
           </div>
         </div>
+      )}
+
+      {/* TAB 9: LANDING CMS & CUSTOMER TESTIMONIALS (ADMIN / MANAGEMENT ONLY) */}
+      {activeTab === 'cms' && isAdmin && (
+        <AdminCmsPanel
+          landingContent={landingContent}
+          testimonials={testimonials}
+          onSaveLandingContent={onSaveLandingContent}
+          onSaveTestimonial={onSaveTestimonial}
+          onDeleteTestimonial={onDeleteTestimonial}
+        />
       )}
 
       {vehicleModalOpen && (

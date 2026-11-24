@@ -3,25 +3,21 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Global default-deny safety net
-    match /{document=**} {
-      allow read, write: if false;
-    }
-
-    // -------------------------------------------------------------------------
-    // Core Hardened RBAC & Validation Primitives
-    // -------------------------------------------------------------------------
+    // =========================================================================
+    // Helper Functions — AUZIO TRADERS Role-Based Access Control (RBAC)
+    // =========================================================================
 
     function isSignedIn() {
       return request.auth != null;
     }
 
-    function isVerifiedUser() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
     }
 
     function userDocExists() {
-      return isVerifiedUser() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+      return isSignedIn() &&
+        exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
     function userRole() {
@@ -31,851 +27,356 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isVerifiedUser() && (
-        request.auth.token.email == 'techhub.wali@gmail.com' ||
+      return isSignedIn() && (
+        (
+          request.auth.token.email == 'techhub.wali@gmail.com' &&
+          request.auth.token.email_verified == true
+        ) ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
         userRole() == 'admin'
       );
     }
 
+    function isManagement() {
+      return isAdmin() || userRole() == 'management';
+    }
+
     function isSales() {
-      return isAdmin() || userRole() == 'sales';
+      return isManagement() || userRole() == 'sales';
+    }
+
+    function isAccounts() {
+      return isManagement() || userRole() == 'accounts';
     }
 
     function isOperations() {
-      return isAdmin() || userRole() == 'operations';
+      return isManagement() || userRole() == 'operations';
     }
 
     function isStaff() {
-      return isAdmin() || userRole() in ['sales', 'operations', 'admin'];
+      return isManagement() ||
+        userRole() in ['sales', 'accounts', 'operations', 'management', 'admin'];
     }
 
-    function incoming() {
-      return request.resource.data;
+    function isNonEmptyString(val, maxLen) {
+      return val is string && val.size() > 0 && val.size() <= maxLen;
     }
 
-    function existing() {
-      return resource.data;
+    function isOptionalString(val, maxLen) {
+      return val is string && val.size() <= maxLen;
     }
 
-    function isValidId(id) {
-      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
-    }
-
-    function isStr(val, minLen, maxLen) {
-      return val is string && val.size() >= minLen && val.size() <= maxLen;
-    }
-
-    function isValidTrackingCode(code) {
-      return code is string && code.size() >= 8 && code.size() <= 32 && code.matches('^AUZ-[A-Z0-9\\-]+$');
+    function isNonNegativeNumber(val) {
+      return val is number && val >= 0;
     }
 
     function isValidCurrency(curr) {
-      return curr in ['USD', 'JPY', 'EUR', 'AUD', 'GBP', 'KES', 'ZAR', 'NZD', 'CAD'];
+      return curr is string && curr.matches('^[A-Z]{3}$');
     }
 
     function isValidShippingMethod(method) {
       return method in ['roro', 'container_20ft', 'container_40ft'];
     }
 
-    function isValidListingType(lt) {
-      return lt in ['auzio_stock', 'auction_listing', 'partner_stock'];
+    function isValidPersistedRole(role) {
+      return role in ['customer', 'dealer', 'sales', 'accounts', 'operations', 'management', 'admin'];
     }
 
-    function isValidOrderMilestone(m) {
-      return m in [
-        'request_received', 'options_prepared', 'quotation_sent', 'customer_approved',
-        'bid_placed', 'vehicle_purchased', 'payment_pending', 'payment_received',
-        'vehicle_in_yard', 'export_docs_ready', 'shipment_booked', 'shipped',
-        'arrived_port', 'completed'
-      ];
-    }
-
-    function isValidPublicMilestone(m) {
-      return m in [
-        'received', 'proforma_issued', 'deposit_confirmed', 'inspection_passed',
-        'vessel_booked', 'shipped', 'cancelled',
-        'request_received', 'options_prepared', 'quotation_sent', 'customer_approved',
-        'bid_placed', 'vehicle_purchased', 'payment_pending', 'payment_received',
-        'vehicle_in_yard', 'export_docs_ready', 'shipment_booked', 'arrived_port', 'completed'
-      ];
-    }
-
-    // -------------------------------------------------------------------------
-    // Entity Validation Blueprints
-    // -------------------------------------------------------------------------
-
-    function isValidUserProfile(data) {
-      return data.keys().hasAll([
-        'uid', 'email', 'displayName', 'role', 'companyName', 'country',
-        'defaultPortId', 'phone', 'consigneeAddress', 'assignedRepName',
-        'assignedRepEmail', 'verified', 'createdAt', 'updatedAt'
-      ]) &&
-      data.keys().hasOnly([
-        'uid', 'email', 'displayName', 'role', 'companyName', 'country',
-        'defaultPortId', 'phone', 'consigneeAddress', 'assignedRepName',
-        'assignedRepEmail', 'verified', 'createdAt', 'updatedAt'
-      ]) &&
-      isValidId(data.uid) &&
-      isStr(data.email, 5, 120) &&
-      isStr(data.displayName, 2, 100) &&
-      data.role in ['customer', 'sales', 'operations', 'admin'] &&
-      isStr(data.companyName, 0, 120) &&
-      isStr(data.country, 0, 80) &&
-      isStr(data.defaultPortId, 0, 64) &&
-      isStr(data.phone, 0, 40) &&
-      isStr(data.consigneeAddress, 0, 240) &&
-      isStr(data.assignedRepName, 0, 100) &&
-      isStr(data.assignedRepEmail, 0, 120) &&
-      data.verified is bool &&
-      data.createdAt is timestamp &&
-      data.updatedAt is timestamp;
-    }
-
-    function isValidMechanicalStatus(mech) {
-      return mech is map &&
-        mech.keys().hasAll(['engine', 'transmission', 'suspension', 'airConditioning', 'frame']) &&
-        mech.keys().hasOnly(['engine', 'transmission', 'suspension', 'airConditioning', 'frame']) &&
-        isStr(mech.engine, 1, 120) &&
-        isStr(mech.transmission, 1, 120) &&
-        isStr(mech.suspension, 1, 120) &&
-        isStr(mech.airConditioning, 1, 120) &&
-        isStr(mech.frame, 1, 120);
-    }
-
-    function isValidAuctionReport(report) {
-      return report is map &&
-        report.keys().hasAll([
-          'exteriorGrade', 'interiorGrade', 'auctionHouse', 'lotNumber',
-          'inspectionDate', 'inspectorNotes', 'mechanicalStatus', 'panelMarks'
-        ]) &&
-        report.keys().hasOnly([
-          'exteriorGrade', 'interiorGrade', 'auctionHouse', 'lotNumber',
-          'inspectionDate', 'inspectorNotes', 'mechanicalStatus', 'panelMarks'
-        ]) &&
-        isStr(report.exteriorGrade, 1, 10) &&
-        isStr(report.interiorGrade, 1, 10) &&
-        isStr(report.auctionHouse, 2, 60) &&
-        isStr(report.lotNumber, 1, 30) &&
-        isStr(report.inspectionDate, 4, 24) &&
-        isStr(report.inspectorNotes, 0, 600) &&
-        isValidMechanicalStatus(report.mechanicalStatus) &&
-        report.panelMarks is map &&
-        report.panelMarks.size() <= 12;
+    function isValidPublicRegistrationRole(role) {
+      return role in ['customer', 'dealer'];
     }
 
     function isValidVehicle(data) {
-      return data.keys().hasAll([
-        'stockCode', 'listingType', 'auctionDate', 'make', 'model', 'trim', 'year',
-        'chassisCode', 'mileageKm', 'engineCc', 'fuelType', 'transmission', 'drivetrain',
-        'steering', 'exteriorColor', 'bodyType', 'originPort', 'volumeM3',
-        'fobPriceUsd', 'status', 'featured', 'images', 'features',
-        'auctionReport', 'createdAt', 'updatedAt'
-      ]) &&
-      data.keys().hasOnly([
-        'stockCode', 'listingType', 'auctionDate', 'make', 'model', 'trim', 'year',
-        'chassisCode', 'mileageKm', 'engineCc', 'fuelType', 'transmission', 'drivetrain',
-        'steering', 'exteriorColor', 'bodyType', 'originPort', 'volumeM3',
-        'fobPriceUsd', 'status', 'featured', 'images', 'features',
-        'auctionReport', 'createdAt', 'updatedAt'
-      ]) &&
-      isStr(data.stockCode, 3, 32) && data.stockCode.matches('^[A-Z0-9\\-]+$') &&
-      isValidListingType(data.listingType) &&
-      isStr(data.auctionDate, 0, 32) &&
-      isStr(data.make, 2, 40) &&
-      isStr(data.model, 1, 60) &&
-      isStr(data.trim, 0, 60) &&
-      data.year is int && data.year >= 1985 && data.year <= 2027 &&
-      isStr(data.chassisCode, 3, 40) &&
-      data.mileageKm is int && data.mileageKm >= 0 && data.mileageKm <= 999999 &&
-      data.engineCc is int && data.engineCc >= 500 && data.engineCc <= 10000 &&
-      data.fuelType in ['Petrol', 'Diesel', 'Hybrid', 'Electric'] &&
-      data.transmission in ['Automatic', 'Manual', 'CVT'] &&
-      data.drivetrain in ['2WD', '4WD', 'AWD'] &&
-      data.steering in ['RHD', 'LHD'] &&
-      isStr(data.exteriorColor, 2, 40) &&
-      data.bodyType in ['SUV', 'Pickup', 'Sedan', 'Hatchback', 'Van', 'Coupe', 'Wagon'] &&
-      data.originPort in ['Yokohama', 'Nagoya', 'Kobe', 'Osaka', 'Hakata'] &&
-      data.volumeM3 is number && data.volumeM3 >= 5 && data.volumeM3 <= 40 &&
-      data.fobPriceUsd is number && data.fobPriceUsd >= 500 && data.fobPriceUsd <= 500000 &&
-      data.status in ['available', 'reserved', 'sold', 'archived'] &&
-      data.featured is bool &&
-      data.images is list && data.images.size() >= 1 && data.images.size() <= 6 &&
-      data.images[0] is string && data.images[0].size() <= 200000 &&
-      data.features is list && data.features.size() <= 20 &&
-      (data.features.size() == 0 || (data.features[0] is string && data.features[0].size() <= 80)) &&
-      isValidAuctionReport(data.auctionReport) &&
-      data.createdAt is timestamp &&
-      data.updatedAt is timestamp;
+      return isNonEmptyString(data.stockCode, 40) &&
+        isNonEmptyString(data.make, 50) &&
+        isNonEmptyString(data.model, 80) &&
+        data.year is int && data.year >= 1980 && data.year <= 2030 &&
+        data.mileageKm is number && data.mileageKm >= 0 && data.mileageKm <= 2000000 &&
+        data.engineCc is number && data.engineCc >= 0 && data.engineCc <= 15000 &&
+        data.volumeM3 is number && data.volumeM3 > 0 && data.volumeM3 <= 120 &&
+        data.fobPriceUsd is number && data.fobPriceUsd > 0 && data.fobPriceUsd <= 5000000 &&
+        data.status in ['available', 'reserved', 'sold', 'archived'] &&
+        data.images is list && data.images.size() >= 1 && data.images.size() <= 30;
     }
 
-    function isValidSourcingRequest(data) {
-      return data.keys().hasAll([
-        'requestCode', 'customerId', 'customerName', 'customerCompany',
-        'assignedStaffId', 'assignedStaffName', 'make', 'model', 'yearMin',
-        'yearMax', 'mileageMaxKm', 'gradePref', 'engineCc', 'transmission',
-        'fuelType', 'colorPref', 'quantity', 'maxBudgetUsd', 'budgetCurrency',
-        'destinationCountry', 'destinationPortId', 'sourcingChannel',
-        'referenceLinks', 'notes', 'maxBidAcknowledged', 'status', 'options',
-        'createdAt', 'updatedAt'
-      ]) &&
-      data.keys().hasOnly([
-        'requestCode', 'customerId', 'customerName', 'customerCompany',
-        'assignedStaffId', 'assignedStaffName', 'make', 'model', 'yearMin',
-        'yearMax', 'mileageMaxKm', 'gradePref', 'engineCc', 'transmission',
-        'fuelType', 'colorPref', 'quantity', 'maxBudgetUsd', 'budgetCurrency',
-        'destinationCountry', 'destinationPortId', 'sourcingChannel',
-        'referenceLinks', 'notes', 'maxBidAcknowledged', 'status', 'options',
-        'createdAt', 'updatedAt'
-      ]) &&
-      isStr(data.requestCode, 6, 32) &&
-      isValidId(data.customerId) &&
-      isStr(data.customerName, 2, 100) &&
-      isStr(data.customerCompany, 0, 120) &&
-      isStr(data.assignedStaffId, 0, 128) &&
-      isStr(data.assignedStaffName, 0, 100) &&
-      isStr(data.make, 2, 40) &&
-      isStr(data.model, 1, 60) &&
-      data.yearMin is int && data.yearMin >= 1985 && data.yearMin <= 2027 &&
-      data.yearMax is int && data.yearMax >= data.yearMin && data.yearMax <= 2027 &&
-      data.mileageMaxKm is int && data.mileageMaxKm >= 0 && data.mileageMaxKm <= 999999 &&
-      isStr(data.gradePref, 0, 32) &&
-      isStr(data.engineCc, 0, 32) &&
-      isStr(data.transmission, 0, 32) &&
-      isStr(data.fuelType, 0, 32) &&
-      isStr(data.colorPref, 0, 40) &&
-      data.quantity is int && data.quantity >= 1 && data.quantity <= 50 &&
-      data.maxBudgetUsd is number && data.maxBudgetUsd >= 1000 && data.maxBudgetUsd <= 2000000 &&
-      isValidCurrency(data.budgetCurrency) &&
-      isStr(data.destinationCountry, 2, 80) &&
-      isStr(data.destinationPortId, 2, 64) &&
-      data.sourcingChannel in ['auction', 'stock', 'either'] &&
-      isStr(data.referenceLinks, 0, 500) &&
-      isStr(data.notes, 0, 1000) &&
-      data.maxBidAcknowledged == true &&
-      data.status in ['new', 'options_sent', 'quoted', 'approved', 'closed'] &&
-      data.options is list && data.options.size() <= 6 &&
-      (data.options.size() == 0 || data.options[0] is map) &&
-      data.createdAt is timestamp &&
-      data.updatedAt is timestamp;
+    function isValidPublicInquiry(data) {
+      return isNonEmptyString(data.trackingCode, 30) &&
+        data.type in ['inquiry', 'reservation'] &&
+        isNonEmptyString(data.vehicleId, 80) &&
+        isNonEmptyString(data.vehicleStockCode, 40) &&
+        isNonEmptyString(data.vehicleTitle, 140) &&
+        isNonEmptyString(data.buyerName, 100) &&
+        isNonEmptyString(data.buyerEmail, 120) &&
+        isOptionalString(data.buyerPhone, 40) &&
+        isNonEmptyString(data.buyerCountry, 80) &&
+        isNonEmptyString(data.destinationPortId, 60) &&
+        isNonEmptyString(data.destinationPortName, 100) &&
+        isValidShippingMethod(data.shippingMethod) &&
+        data.includeInsurance is bool &&
+        isNonNegativeNumber(data.fobPriceUsd) &&
+        isNonNegativeNumber(data.freightUsd) &&
+        isNonNegativeNumber(data.inspectionUsd) &&
+        isNonNegativeNumber(data.insuranceUsd) &&
+        isNonNegativeNumber(data.quotedCifUsd) &&
+        isValidCurrency(data.currency) &&
+        isOptionalString(data.message, 1500) &&
+        data.status == 'received';
     }
 
-    function isValidQuotation(data) {
-      return data.keys().hasAll([
-        'quoteNumber', 'sourcingRequestId', 'vehicleId', 'vehicleTitle', 'stockCode',
-        'customerId', 'customerName', 'customerCompany', 'preparedByStaffId',
-        'preparedByName', 'destinationPortId', 'destinationPortName', 'currency',
-        'fobVehicleUsd', 'auctionFeeUsd', 'exportDocsUsd', 'jevicInspectionUsd',
-        'seaFreightUsd', 'marineInsuranceUsd', 'totalCifUsd', 'authorizedMaxBidUsd',
-        'status', 'approvedAt', 'approvedByUid', 'declineReason', 'validUntil',
-        'notes', 'createdAt', 'updatedAt'
-      ]) &&
-      data.keys().hasOnly([
-        'quoteNumber', 'sourcingRequestId', 'vehicleId', 'vehicleTitle', 'stockCode',
-        'customerId', 'customerName', 'customerCompany', 'preparedByStaffId',
-        'preparedByName', 'destinationPortId', 'destinationPortName', 'currency',
-        'fobVehicleUsd', 'auctionFeeUsd', 'exportDocsUsd', 'jevicInspectionUsd',
-        'seaFreightUsd', 'marineInsuranceUsd', 'totalCifUsd', 'authorizedMaxBidUsd',
-        'status', 'approvedAt', 'approvedByUid', 'declineReason', 'validUntil',
-        'notes', 'createdAt', 'updatedAt'
-      ]) &&
-      isStr(data.quoteNumber, 6, 32) &&
-      isStr(data.sourcingRequestId, 0, 128) &&
-      isStr(data.vehicleId, 0, 128) &&
-      isStr(data.vehicleTitle, 3, 120) &&
-      isStr(data.stockCode, 2, 32) &&
-      isValidId(data.customerId) &&
-      isStr(data.customerName, 2, 100) &&
-      isStr(data.customerCompany, 0, 120) &&
-      isStr(data.preparedByStaffId, 0, 128) &&
-      isStr(data.preparedByName, 0, 100) &&
-      isStr(data.destinationPortId, 2, 64) &&
-      isStr(data.destinationPortName, 2, 100) &&
-      isValidCurrency(data.currency) &&
-      data.fobVehicleUsd is number && data.fobVehicleUsd >= 0 && data.fobVehicleUsd <= 500000 &&
-      data.auctionFeeUsd is number && data.auctionFeeUsd >= 0 && data.auctionFeeUsd <= 20000 &&
-      data.exportDocsUsd is number && data.exportDocsUsd >= 0 && data.exportDocsUsd <= 10000 &&
-      data.jevicInspectionUsd is number && data.jevicInspectionUsd >= 0 && data.jevicInspectionUsd <= 10000 &&
-      data.seaFreightUsd is number && data.seaFreightUsd >= 0 && data.seaFreightUsd <= 50000 &&
-      data.marineInsuranceUsd is number && data.marineInsuranceUsd >= 0 && data.marineInsuranceUsd <= 25000 &&
-      data.totalCifUsd is number && data.totalCifUsd >= 0 && data.totalCifUsd <= 650000 &&
-      data.authorizedMaxBidUsd is number && data.authorizedMaxBidUsd >= 0 && data.authorizedMaxBidUsd <= 500000 &&
-      data.status in ['draft', 'sent', 'approved', 'declined', 'expired'] &&
-      isStr(data.approvedAt, 0, 40) &&
-      isStr(data.approvedByUid, 0, 128) &&
-      isStr(data.declineReason, 0, 400) &&
-      isStr(data.validUntil, 0, 32) &&
-      isStr(data.notes, 0, 800) &&
-      data.createdAt is timestamp &&
-      data.updatedAt is timestamp;
+    function isValidOrderStatusCreate(data, trackingCode) {
+      return data.trackingCode == trackingCode &&
+        isNonEmptyString(data.inquiryId, 80) &&
+        isNonEmptyString(data.vehicleStockCode, 40) &&
+        isNonEmptyString(data.vehicleTitle, 140) &&
+        isNonEmptyString(data.destinationPortName, 100) &&
+        isValidShippingMethod(data.shippingMethod) &&
+        isNonNegativeNumber(data.quotedCifUsd) &&
+        isValidCurrency(data.currency) &&
+        data.milestone == 'received';
     }
 
-    function isValidExportOrder(data) {
-      return data.keys().hasAll([
-        'orderNumber', 'trackingCode', 'quotationId', 'customerId', 'customerName',
-        'customerCompany', 'vehicleId', 'vehicleStockCode', 'vehicleTitle', 'listingType',
-        'destinationCountry', 'destinationPortId', 'destinationPortName', 'shippingMethod',
-        'fobUsd', 'freightUsd', 'inspectionUsd', 'insuranceUsd', 'totalCifUsd', 'currency',
-        'authorizedMaxBidUsd', 'placedBidUsd', 'milestone', 'vesselName', 'voyageNumber',
-        'blNumber', 'etdDate', 'etaDate', 'scheduleIsEstimate', 'createdAt', 'updatedAt'
-      ]) &&
-      data.keys().hasOnly([
-        'orderNumber', 'trackingCode', 'quotationId', 'customerId', 'customerName',
-        'customerCompany', 'vehicleId', 'vehicleStockCode', 'vehicleTitle', 'listingType',
-        'destinationCountry', 'destinationPortId', 'destinationPortName', 'shippingMethod',
-        'fobUsd', 'freightUsd', 'inspectionUsd', 'insuranceUsd', 'totalCifUsd', 'currency',
-        'authorizedMaxBidUsd', 'placedBidUsd', 'milestone', 'vesselName', 'voyageNumber',
-        'blNumber', 'etdDate', 'etaDate', 'scheduleIsEstimate', 'createdAt', 'updatedAt'
-      ]) &&
-      isStr(data.orderNumber, 6, 32) &&
-      isValidTrackingCode(data.trackingCode) &&
-      isStr(data.quotationId, 0, 128) &&
-      isValidId(data.customerId) &&
-      isStr(data.customerName, 2, 100) &&
-      isStr(data.customerCompany, 0, 120) &&
-      isStr(data.vehicleId, 0, 128) &&
-      isStr(data.vehicleStockCode, 2, 32) &&
-      isStr(data.vehicleTitle, 3, 120) &&
-      isValidListingType(data.listingType) &&
-      isStr(data.destinationCountry, 2, 80) &&
-      isStr(data.destinationPortId, 2, 64) &&
-      isStr(data.destinationPortName, 2, 100) &&
-      isValidShippingMethod(data.shippingMethod) &&
-      data.fobUsd is number && data.fobUsd >= 0 && data.fobUsd <= 500000 &&
-      data.freightUsd is number && data.freightUsd >= 0 && data.freightUsd <= 50000 &&
-      data.inspectionUsd is number && data.inspectionUsd >= 0 && data.inspectionUsd <= 10000 &&
-      data.insuranceUsd is number && data.insuranceUsd >= 0 && data.insuranceUsd <= 25000 &&
-      data.totalCifUsd is number && data.totalCifUsd >= 0 && data.totalCifUsd <= 650000 &&
-      isValidCurrency(data.currency) &&
-      data.authorizedMaxBidUsd is number && data.authorizedMaxBidUsd >= 0 && data.authorizedMaxBidUsd <= 500000 &&
-      data.placedBidUsd is number && data.placedBidUsd >= 0 &&
-      (data.authorizedMaxBidUsd == 0 || data.placedBidUsd <= data.authorizedMaxBidUsd) &&
-      isValidOrderMilestone(data.milestone) &&
-      isStr(data.vesselName, 0, 100) &&
-      isStr(data.voyageNumber, 0, 40) &&
-      isStr(data.blNumber, 0, 60) &&
-      isStr(data.etdDate, 0, 32) &&
-      isStr(data.etaDate, 0, 32) &&
-      data.scheduleIsEstimate is bool &&
-      data.createdAt is timestamp &&
-      data.updatedAt is timestamp;
-    }
+    // =========================================================================
+    // 1. User Profiles & Role Registry
+    // =========================================================================
 
-    function isValidOrderMessage(data) {
-      return data.keys().hasAll([
-        'orderId', 'customerId', 'senderUid', 'senderName', 'senderRole',
-        'body', 'isInternalStaffOnly', 'createdAt'
-      ]) &&
-      data.keys().hasOnly([
-        'orderId', 'customerId', 'senderUid', 'senderName', 'senderRole',
-        'body', 'isInternalStaffOnly', 'createdAt'
-      ]) &&
-      isValidId(data.orderId) &&
-      isValidId(data.customerId) &&
-      isValidId(data.senderUid) &&
-      isStr(data.senderName, 2, 100) &&
-      data.senderRole in ['customer', 'sales', 'operations', 'admin'] &&
-      isStr(data.body, 1, 1500) &&
-      data.isInternalStaffOnly is bool &&
-      data.createdAt is timestamp;
-    }
-
-    function isValidExportDocument(data) {
-      return data.keys().hasAll([
-        'orderId', 'orderNumber', 'customerId', 'title', 'docType', 'fileName',
-        'fileUrl', 'isCustomerVisible', 'uploadedByName', 'notes', 'createdAt', 'updatedAt'
-      ]) &&
-      data.keys().hasOnly([
-        'orderId', 'orderNumber', 'customerId', 'title', 'docType', 'fileName',
-        'fileUrl', 'isCustomerVisible', 'uploadedByName', 'notes', 'createdAt', 'updatedAt'
-      ]) &&
-      isValidId(data.orderId) &&
-      isStr(data.orderNumber, 3, 32) &&
-      isValidId(data.customerId) &&
-      isStr(data.title, 2, 120) &&
-      data.docType in [
-        'proforma_invoice', 'export_certificate', 'bill_of_lading',
-        'auction_sheet', 'inspection_report', 'commercial_invoice', 'internal_cost_sheet'
-      ] &&
-      isStr(data.fileName, 2, 120) &&
-      isStr(data.fileUrl, 0, 200000) &&
-      data.isCustomerVisible is bool &&
-      isStr(data.uploadedByName, 2, 100) &&
-      isStr(data.notes, 0, 400) &&
-      data.createdAt is timestamp &&
-      data.updatedAt is timestamp;
-    }
-
-    function isValidAuditLog(data) {
-      return data.keys().hasAll([
-        'actorUid', 'actorEmail', 'actorRole', 'action',
-        'targetType', 'targetId', 'summary', 'createdAt'
-      ]) &&
-      data.keys().hasOnly([
-        'actorUid', 'actorEmail', 'actorRole', 'action',
-        'targetType', 'targetId', 'summary', 'createdAt'
-      ]) &&
-      isValidId(data.actorUid) &&
-      isStr(data.actorEmail, 3, 120) &&
-      data.actorRole in ['visitor', 'customer', 'sales', 'operations', 'admin'] &&
-      isStr(data.action, 2, 64) &&
-      isStr(data.targetType, 2, 40) &&
-      isStr(data.targetId, 1, 128) &&
-      isStr(data.summary, 3, 400) &&
-      data.createdAt is timestamp;
-    }
-
-    function isValidInquiry(data) {
-      return data.keys().hasAll([
-        'trackingCode', 'type', 'vehicleId', 'vehicleStockCode', 'vehicleTitle',
-        'buyerName', 'buyerEmail', 'buyerPhone', 'buyerCountry',
-        'destinationPortId', 'destinationPortName', 'shippingMethod',
-        'includeInsurance', 'fobPriceUsd', 'freightUsd', 'inspectionUsd',
-        'insuranceUsd', 'quotedCifUsd', 'currency', 'message', 'status',
-        'vesselName', 'etaDate', 'adminNotes', 'createdAt', 'updatedAt'
-      ]) &&
-      data.keys().hasOnly([
-        'trackingCode', 'type', 'vehicleId', 'vehicleStockCode', 'vehicleTitle',
-        'buyerName', 'buyerEmail', 'buyerPhone', 'buyerCountry',
-        'destinationPortId', 'destinationPortName', 'shippingMethod',
-        'includeInsurance', 'fobPriceUsd', 'freightUsd', 'inspectionUsd',
-        'insuranceUsd', 'quotedCifUsd', 'currency', 'message', 'status',
-        'vesselName', 'etaDate', 'adminNotes', 'createdAt', 'updatedAt'
-      ]) &&
-      isValidTrackingCode(data.trackingCode) &&
-      data.type in ['inquiry', 'reservation'] &&
-      isValidId(data.vehicleId) &&
-      isStr(data.vehicleStockCode, 3, 32) &&
-      isStr(data.vehicleTitle, 3, 120) &&
-      isStr(data.buyerName, 2, 100) &&
-      isStr(data.buyerEmail, 5, 120) &&
-      isStr(data.buyerPhone, 6, 40) &&
-      isStr(data.buyerCountry, 2, 80) &&
-      isStr(data.destinationPortId, 2, 64) &&
-      isStr(data.destinationPortName, 2, 100) &&
-      isValidShippingMethod(data.shippingMethod) &&
-      data.includeInsurance is bool &&
-      data.fobPriceUsd is number && data.fobPriceUsd >= 0 && data.fobPriceUsd <= 500000 &&
-      data.freightUsd is number && data.freightUsd >= 0 && data.freightUsd <= 50000 &&
-      data.inspectionUsd is number && data.inspectionUsd >= 0 && data.inspectionUsd <= 10000 &&
-      data.insuranceUsd is number && data.insuranceUsd >= 0 && data.insuranceUsd <= 25000 &&
-      data.quotedCifUsd is number && data.quotedCifUsd >= 0 && data.quotedCifUsd <= 650000 &&
-      isValidCurrency(data.currency) &&
-      isStr(data.message, 0, 1000) &&
-      isValidPublicMilestone(data.status) &&
-      isStr(data.vesselName, 0, 100) &&
-      isStr(data.etaDate, 0, 40) &&
-      isStr(data.adminNotes, 0, 1000) &&
-      data.createdAt is timestamp &&
-      data.updatedAt is timestamp;
-    }
-
-    function isValidOrderStatus(data) {
-      return data.keys().hasAll([
-        'trackingCode', 'inquiryId', 'vehicleStockCode', 'vehicleTitle',
-        'destinationPortName', 'shippingMethod', 'quotedCifUsd', 'currency',
-        'milestone', 'vesselName', 'etaDate', 'publicNote', 'createdAt', 'updatedAt'
-      ]) &&
-      data.keys().hasOnly([
-        'trackingCode', 'inquiryId', 'vehicleStockCode', 'vehicleTitle',
-        'destinationPortName', 'shippingMethod', 'quotedCifUsd', 'currency',
-        'milestone', 'vesselName', 'etaDate', 'publicNote', 'createdAt', 'updatedAt'
-      ]) &&
-      isValidTrackingCode(data.trackingCode) &&
-      isValidId(data.inquiryId) &&
-      isStr(data.vehicleStockCode, 3, 32) &&
-      isStr(data.vehicleTitle, 3, 120) &&
-      isStr(data.destinationPortName, 2, 100) &&
-      isValidShippingMethod(data.shippingMethod) &&
-      data.quotedCifUsd is number && data.quotedCifUsd >= 0 && data.quotedCifUsd <= 650000 &&
-      isValidCurrency(data.currency) &&
-      isValidPublicMilestone(data.milestone) &&
-      isStr(data.vesselName, 0, 100) &&
-      isStr(data.etaDate, 0, 40) &&
-      isStr(data.publicNote, 0, 400) &&
-      data.createdAt is timestamp &&
-      data.updatedAt is timestamp;
-    }
-
-    function isValidCompanySettings(data) {
-      return data.keys().hasAll([
-        'companyName', 'tagline', 'officeAddress', 'supportEmail',
-        'whatsappPhone', 'bankName', 'bankBranch', 'accountName',
-        'accountNumber', 'swiftCode', 'bankAddress', 'invoiceValidityDays',
-        'exchangeRates', 'updatedAt'
-      ]) &&
-      data.keys().hasOnly([
-        'companyName', 'tagline', 'officeAddress', 'supportEmail',
-        'whatsappPhone', 'bankName', 'bankBranch', 'accountName',
-        'accountNumber', 'swiftCode', 'bankAddress', 'invoiceValidityDays',
-        'exchangeRates', 'updatedAt'
-      ]) &&
-      isStr(data.companyName, 2, 100) &&
-      isStr(data.tagline, 0, 160) &&
-      isStr(data.officeAddress, 5, 240) &&
-      isStr(data.supportEmail, 5, 120) &&
-      isStr(data.whatsappPhone, 6, 40) &&
-      isStr(data.bankName, 2, 120) &&
-      isStr(data.bankBranch, 0, 120) &&
-      isStr(data.accountName, 2, 120) &&
-      isStr(data.accountNumber, 4, 60) &&
-      isStr(data.swiftCode, 6, 20) &&
-      isStr(data.bankAddress, 0, 240) &&
-      data.invoiceValidityDays is int && data.invoiceValidityDays >= 1 && data.invoiceValidityDays <= 30 &&
-      data.exchangeRates is map &&
-      data.exchangeRates.keys().hasAll(['JPY', 'EUR', 'AUD', 'GBP', 'KES', 'ZAR', 'NZD', 'CAD']) &&
-      data.exchangeRates.keys().hasOnly(['JPY', 'EUR', 'AUD', 'GBP', 'KES', 'ZAR', 'NZD', 'CAD']) &&
-      data.exchangeRates.JPY is number && data.exchangeRates.JPY > 0 &&
-      data.exchangeRates.EUR is number && data.exchangeRates.EUR > 0 &&
-      data.exchangeRates.AUD is number && data.exchangeRates.AUD > 0 &&
-      data.exchangeRates.GBP is number && data.exchangeRates.GBP > 0 &&
-      data.exchangeRates.KES is number && data.exchangeRates.KES > 0 &&
-      data.exchangeRates.ZAR is number && data.exchangeRates.ZAR > 0 &&
-      data.exchangeRates.NZD is number && data.exchangeRates.NZD > 0 &&
-      data.exchangeRates.CAD is number && data.exchangeRates.CAD > 0 &&
-      data.updatedAt is timestamp;
-    }
-
-    function isValidAdminUser(data) {
-      return data.keys().hasAll(['email', 'role', 'addedAt']) &&
-        data.keys().hasOnly(['email', 'role', 'addedAt']) &&
-        isStr(data.email, 5, 120) &&
-        data.role in ['admin', 'super_admin'] &&
-        data.addedAt is timestamp;
-    }
-
-    // -------------------------------------------------------------------------
-    // Collection Rules (Strict Server-Enforced RBAC & Data Isolation)
-    // -------------------------------------------------------------------------
-
-    // 1. User Profiles (PII isolated to owner & staff; no self-privilege escalation)
     match /users/{uid} {
-      allow get: if isValidId(uid) && ((isVerifiedUser() && request.auth.uid == uid) || isStaff());
+      allow get: if isOwner(uid) || isStaff();
       allow list: if isStaff();
 
-      allow create: if isValidId(uid) &&
-        isValidUserProfile(incoming()) &&
-        incoming().uid == uid &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time && (
-          isAdmin() ||
-          (isVerifiedUser() && request.auth.uid == uid && incoming().role == 'customer' && incoming().verified == false)
-        );
+      // Self-registration strictly restricted to customer or dealer role (never staff/admin)
+      allow create: if (
+        isOwner(uid) &&
+        isValidPublicRegistrationRole(request.resource.data.role) &&
+        request.resource.data.uid == uid &&
+        isNonEmptyString(request.resource.data.email, 160) &&
+        isNonEmptyString(request.resource.data.displayName, 120)
+      ) || (
+        isManagement() &&
+        isValidPersistedRole(request.resource.data.role)
+      );
 
-      allow update: if isValidId(uid) &&
-        isValidUserProfile(incoming()) &&
-        incoming().uid == existing().uid &&
-        incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'displayName', 'role', 'companyName', 'country', 'defaultPortId',
-            'phone', 'consigneeAddress', 'assignedRepName', 'assignedRepEmail',
-            'verified', 'updatedAt'
-          ])) ||
-          (isVerifiedUser() && request.auth.uid == uid &&
-            incoming().role == existing().role &&
-            incoming().verified == existing().verified &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'displayName', 'companyName', 'country', 'defaultPortId',
-              'phone', 'consigneeAddress', 'updatedAt'
-            ]))
-        );
+      // Users can update profile details, but CANNOT self-escalate role or verified flag
+      allow update: if (
+        isOwner(uid) &&
+        request.resource.data.uid == resource.data.uid &&
+        request.resource.data.role == resource.data.role &&
+        request.resource.data.verified == resource.data.verified
+      ) || (
+        isManagement() &&
+        isValidPersistedRole(request.resource.data.role)
+      );
 
-      allow delete: if isValidId(uid) && isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // 2. Public Vehicle Inventory Catalog (Ops & Admin managed)
+    match /admins/{uid} {
+      allow get: if isOwner(uid) || isAdmin();
+      allow list, create, update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 2. Public & Internal Vehicle Inventory
+    // =========================================================================
+
     match /vehicles/{vehicleId} {
-      allow get: if isValidId(vehicleId);
-      allow list: if resource.data.status in ['available', 'reserved', 'sold', 'archived'];
-
-      allow create: if isValidId(vehicleId) &&
-        isValidVehicle(incoming()) &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time &&
-        isOperations();
-
-      allow update: if isValidId(vehicleId) &&
-        isValidVehicle(incoming()) &&
-        incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'stockCode', 'listingType', 'auctionDate', 'make', 'model', 'trim', 'year',
-          'chassisCode', 'mileageKm', 'engineCc', 'fuelType', 'transmission', 'drivetrain',
-          'steering', 'exteriorColor', 'bodyType', 'originPort', 'volumeM3',
-          'fobPriceUsd', 'status', 'featured', 'images', 'features',
-          'auctionReport', 'updatedAt'
-        ]) &&
-        isOperations();
-
-      allow delete: if isValidId(vehicleId) && isOperations();
+      allow read: if true;
+      allow create: if isOperations() && isValidVehicle(request.resource.data);
+      allow update: if isOperations() && isValidVehicle(request.resource.data);
+      allow delete: if isAdmin();
     }
 
-    // 3. Sourcing Requests (Isolated to owning Customer and Staff)
-    match /sourcingRequests/{requestId} {
-      allow get: if isValidId(requestId) && (
-        isStaff() || (isVerifiedUser() && existing().customerId == request.auth.uid)
-      );
-      allow list: if isStaff() || (isVerifiedUser() && resource.data.customerId == request.auth.uid);
+    // =========================================================================
+    // 3. Sourcing Requests
+    // =========================================================================
 
-      allow create: if isValidId(requestId) &&
-        isValidSourcingRequest(incoming()) &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time && (
-          isStaff() || (isVerifiedUser() && incoming().customerId == request.auth.uid && incoming().status == 'new')
-        );
+    match /sourcingRequests/{reqId} {
+      allow get, list: if isStaff() ||
+        (isSignedIn() && resource.data.customerId == request.auth.uid);
 
-      allow update: if isValidId(requestId) &&
-        isValidSourcingRequest(incoming()) &&
-        incoming().customerId == existing().customerId &&
-        incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'assignedStaffId', 'assignedStaffName', 'status', 'options', 'notes', 'updatedAt'
-        ]) &&
-        isStaff();
-
-      allow delete: if isValidId(requestId) && isAdmin();
-    }
-
-    // 4. Quotations & Maximum Bid Authorizations
-    match /quotations/{quotationId} {
-      allow get: if isValidId(quotationId) && (
-        isStaff() || (isVerifiedUser() && existing().customerId == request.auth.uid)
-      );
-      allow list: if isStaff() || (isVerifiedUser() && resource.data.customerId == request.auth.uid);
-
-      allow create: if isValidId(quotationId) &&
-        isValidQuotation(incoming()) &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time &&
-        isSales();
-
-      allow update: if isValidId(quotationId) &&
-        isValidQuotation(incoming()) &&
-        incoming().customerId == existing().customerId &&
-        incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time && (
-          (isSales() && incoming().diff(existing()).affectedKeys().hasOnly([
-            'vehicleTitle', 'stockCode', 'destinationPortId', 'destinationPortName',
-            'currency', 'fobVehicleUsd', 'auctionFeeUsd', 'exportDocsUsd',
-            'jevicInspectionUsd', 'seaFreightUsd', 'marineInsuranceUsd', 'totalCifUsd',
-            'authorizedMaxBidUsd', 'status', 'validUntil', 'notes', 'updatedAt'
-          ])) ||
-          (isVerifiedUser() && existing().customerId == request.auth.uid &&
-            existing().status == 'sent' &&
-            incoming().status in ['approved', 'declined'] &&
-            incoming().approvedByUid == request.auth.uid &&
-            incoming().diff(existing()).affectedKeys().hasOnly([
-              'status', 'approvedAt', 'approvedByUid', 'declineReason', 'updatedAt'
-            ]))
-        );
-
-      allow delete: if isValidId(quotationId) && isAdmin();
-    }
-
-    // 5. Export Orders & 14-Stage Logistics (Server-Enforced Bid Ceiling Guard)
-    match /orders/{orderId} {
-      allow get: if isValidId(orderId) && (
-        isStaff() || (isVerifiedUser() && existing().customerId == request.auth.uid)
-      );
-      allow list: if isStaff() || (isVerifiedUser() && resource.data.customerId == request.auth.uid);
-
-      allow create: if isValidId(orderId) &&
-        isValidExportOrder(incoming()) &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time &&
-        isStaff();
-
-      allow update: if isValidId(orderId) &&
-        isValidExportOrder(incoming()) &&
-        incoming().customerId == existing().customerId &&
-        incoming().orderNumber == existing().orderNumber &&
-        incoming().trackingCode == existing().trackingCode &&
-        incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'placedBidUsd', 'authorizedMaxBidUsd', 'milestone', 'vesselName',
-          'voyageNumber', 'blNumber', 'etdDate', 'etaDate', 'scheduleIsEstimate', 'updatedAt'
-        ]) &&
-        isStaff();
-
-      allow delete: if isValidId(orderId) && isAdmin();
-    }
-
-    // 6. Order Messages (Strict Customer vs Internal Staff Note Isolation)
-    match /orderMessages/{messageId} {
-      allow get: if isValidId(messageId) && (
-        isStaff() || (isVerifiedUser() && existing().customerId == request.auth.uid && existing().isInternalStaffOnly == false)
-      );
-      allow list: if isStaff() || (
-        isVerifiedUser() && resource.data.customerId == request.auth.uid && resource.data.isInternalStaffOnly == false
-      );
-
-      allow create: if isValidId(messageId) &&
-        isValidOrderMessage(incoming()) &&
-        incoming().createdAt == request.time && (
-          isStaff() ||
-          (isVerifiedUser() && incoming().customerId == request.auth.uid &&
-            incoming().senderUid == request.auth.uid &&
-            incoming().senderRole == 'customer' &&
-            incoming().isInternalStaffOnly == false)
-        );
-
-      allow update: if false;
-      allow delete: if isValidId(messageId) && isAdmin();
-    }
-
-    // 7. Export Document Vault (Strict isCustomerVisible Isolation)
-    match /documents/{docId} {
-      allow get: if isValidId(docId) && (
-        isStaff() || (isVerifiedUser() && existing().customerId == request.auth.uid && existing().isCustomerVisible == true)
-      );
-      allow list: if isStaff() || (
-        isVerifiedUser() && resource.data.customerId == request.auth.uid && resource.data.isCustomerVisible == true
-      );
-
-      allow create: if isValidId(docId) &&
-        isValidExportDocument(incoming()) &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time &&
-        isStaff();
-
-      allow update: if isValidId(docId) &&
-        isValidExportDocument(incoming()) &&
-        incoming().customerId == existing().customerId &&
-        incoming().orderId == existing().orderId &&
-        incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'title', 'docType', 'fileName', 'fileUrl', 'isCustomerVisible', 'notes', 'updatedAt'
-        ]) &&
-        isStaff();
-
-      allow delete: if isValidId(docId) && isOperations();
-    }
-
-    // 8. Immutable Audit Trail (Admin read only, append-only)
-    match /auditLogs/{logId} {
-      allow get: if isValidId(logId) && isAdmin();
-      allow list: if isAdmin();
-
-      allow create: if isValidId(logId) &&
-        isValidAuditLog(incoming()) &&
-        incoming().createdAt == request.time &&
-        isVerifiedUser() &&
-        incoming().actorUid == request.auth.uid;
-
-      allow update: if false;
-      allow delete: if isValidId(logId) && isAdmin();
-    }
-
-    // 9. Public Visitor Inquiries (PII isolated to Staff/Admin)
-    match /inquiries/{inquiryId} {
-      allow get: if isValidId(inquiryId) && isStaff();
-      allow list: if isStaff();
-
-      allow create: if isValidId(inquiryId) &&
-        isValidInquiry(incoming()) &&
-        incoming().status == 'received' &&
-        incoming().vesselName == '' &&
-        incoming().etaDate == '' &&
-        incoming().adminNotes == '' &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time &&
+      allow create: if isSignedIn() && (
+        isStaff() ||
         (
-          incoming().vehicleId == 'GENERAL' ||
-          exists(/databases/$(database)/documents/vehicles/$(incoming().vehicleId))
-        ) &&
-        existsAfter(/databases/$(database)/documents/orderStatus/$(incoming().trackingCode));
+          request.resource.data.customerId == request.auth.uid &&
+          request.resource.data.status == 'new' &&
+          request.resource.data.maxBidAcknowledged == true &&
+          isNonEmptyString(request.resource.data.make, 60) &&
+          isNonEmptyString(request.resource.data.model, 80) &&
+          request.resource.data.maxBudgetUsd is number &&
+          request.resource.data.maxBudgetUsd > 0 &&
+          isValidCurrency(request.resource.data.budgetCurrency)
+        )
+      );
 
-      allow update: if isValidId(inquiryId) &&
-        isValidInquiry(incoming()) &&
-        incoming().trackingCode == existing().trackingCode &&
-        incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'status', 'vesselName', 'etaDate', 'adminNotes', 'updatedAt'
-        ]) &&
-        isStaff();
+      allow update: if isSales() || isOperations() || (
+        isSignedIn() &&
+        resource.data.customerId == request.auth.uid &&
+        request.resource.data.customerId == resource.data.customerId &&
+        resource.data.status == 'new' &&
+        request.resource.data.status == 'new'
+      );
 
-      allow delete: if isValidId(inquiryId) && isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // 10. Public Non-PII Order Status Lookup
-    match /orderStatus/{trackingCode} {
-      allow get: if isValidTrackingCode(trackingCode);
-      allow list: if isStaff();
+    // =========================================================================
+    // 4. Quotations & Customer Approval
+    // =========================================================================
 
-      allow create: if isValidTrackingCode(trackingCode) &&
-        isValidOrderStatus(incoming()) &&
-        incoming().trackingCode == trackingCode &&
-        incoming().createdAt == request.time &&
-        incoming().updatedAt == request.time && (
-          isStaff() ||
-          (incoming().milestone == 'received' &&
-           incoming().vesselName == '' &&
-           incoming().etaDate == '' &&
-           existsAfter(/databases/$(database)/documents/inquiries/$(incoming().inquiryId)))
+    match /quotations/{quoteId} {
+      allow get, list: if isStaff() ||
+        (isSignedIn() && resource.data.customerId == request.auth.uid);
+
+      allow create: if isSales() &&
+        isNonEmptyString(request.resource.data.quoteNumber, 40) &&
+        isNonEmptyString(request.resource.data.customerId, 128) &&
+        isNonNegativeNumber(request.resource.data.totalCifUsd) &&
+        isNonNegativeNumber(request.resource.data.authorizedMaxBidUsd) &&
+        isValidCurrency(request.resource.data.currency);
+
+      allow update: if isSales() || isAccounts() || (
+        isSignedIn() &&
+        resource.data.customerId == request.auth.uid &&
+        resource.data.status == 'sent' &&
+        request.resource.data.status in ['approved', 'declined'] &&
+        request.resource.data.totalCifUsd == resource.data.totalCifUsd &&
+        request.resource.data.authorizedMaxBidUsd == resource.data.authorizedMaxBidUsd &&
+        request.resource.data.customerId == resource.data.customerId &&
+        request.resource.data.quoteNumber == resource.data.quoteNumber
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 5. Export Orders & Bid Ceiling Guardrail
+    // =========================================================================
+
+    match /orders/{orderId} {
+      allow get, list: if isStaff() ||
+        (isSignedIn() && resource.data.customerId == request.auth.uid);
+
+      allow create: if isStaff() &&
+        isNonEmptyString(request.resource.data.orderNumber, 40) &&
+        isNonEmptyString(request.resource.data.customerId, 128) &&
+        isNonNegativeNumber(request.resource.data.authorizedMaxBidUsd) &&
+        isNonNegativeNumber(request.resource.data.placedBidUsd) &&
+        (
+          request.resource.data.authorizedMaxBidUsd == 0 ||
+          request.resource.data.placedBidUsd <= request.resource.data.authorizedMaxBidUsd
         );
 
-      allow update: if isValidTrackingCode(trackingCode) &&
-        isValidOrderStatus(incoming()) &&
-        incoming().trackingCode == existing().trackingCode &&
-        incoming().inquiryId == existing().inquiryId &&
-        incoming().createdAt == existing().createdAt &&
-        incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'milestone', 'vesselName', 'etaDate', 'publicNote', 'updatedAt'
-        ]) &&
-        isStaff();
+      allow update: if isStaff() &&
+        isNonNegativeNumber(request.resource.data.placedBidUsd) &&
+        (
+          request.resource.data.authorizedMaxBidUsd == 0 ||
+          request.resource.data.placedBidUsd <= request.resource.data.authorizedMaxBidUsd
+        );
 
-      allow delete: if isValidTrackingCode(trackingCode) && isAdmin();
+      allow delete: if isAdmin();
     }
 
-    // 11. Company Export Profile & SMBC Tokyo Wire Details
-    match /companySettings/{settingId} {
-      allow get: if isValidId(settingId) && settingId == 'exportProfile';
+    // =========================================================================
+    // 6. Order Messages (Internal Staff Notes Hidden from Customers)
+    // =========================================================================
+
+    match /orderMessages/{msgId} {
+      allow get, list: if isStaff() || (
+        isSignedIn() &&
+        resource.data.customerId == request.auth.uid &&
+        resource.data.isInternalStaffOnly == false
+      );
+
+      allow create: if isSignedIn() &&
+        isNonEmptyString(request.resource.data.orderId, 80) &&
+        isNonEmptyString(request.resource.data.body, 2000) &&
+        request.resource.data.senderUid == request.auth.uid &&
+        (
+          isStaff() ||
+          (
+            request.resource.data.customerId == request.auth.uid &&
+            request.resource.data.isInternalStaffOnly == false
+          )
+        );
+
+      allow update, delete: if isAdmin();
+    }
+
+    // =========================================================================
+    // 7. Export Documents Vault (Internal Cost Sheets Hidden from Customers)
+    // =========================================================================
+
+    match /documents/{docId} {
+      allow get, list: if isStaff() || (
+        isSignedIn() &&
+        resource.data.customerId == request.auth.uid &&
+        resource.data.isCustomerVisible == true
+      );
+
+      allow create, update: if isStaff() &&
+        isNonEmptyString(request.resource.data.orderId, 80) &&
+        isNonEmptyString(request.resource.data.title, 140) &&
+        isNonEmptyString(request.resource.data.fileName, 160);
+
+      allow delete: if isOperations();
+    }
+
+    // =========================================================================
+    // 8. Audit Logs
+    // =========================================================================
+
+    match /auditLogs/{logId} {
+      allow get, list: if isStaff();
+      allow create: if isSignedIn() &&
+        isNonEmptyString(request.resource.data.action, 80) &&
+        isNonEmptyString(request.resource.data.summary, 400);
+      allow update, delete: if false;
+    }
+
+    // =========================================================================
+    // 9. Public Inquiries, Tracking & Company Settings
+    // =========================================================================
+
+    match /inquiries/{inquiryId} {
+      allow create: if isValidPublicInquiry(request.resource.data);
+      allow read, update, delete: if isStaff();
+    }
+
+    match /orderStatus/{trackingCode} {
+      allow get: if true;
       allow list: if isStaff();
-
-      allow create: if isValidId(settingId) &&
-        settingId == 'exportProfile' &&
-        isValidCompanySettings(incoming()) &&
-        incoming().updatedAt == request.time &&
-        isAdmin();
-
-      allow update: if isValidId(settingId) &&
-        settingId == 'exportProfile' &&
-        isValidCompanySettings(incoming()) &&
-        incoming().updatedAt == request.time &&
-        incoming().diff(existing()).affectedKeys().hasOnly([
-          'companyName', 'tagline', 'officeAddress', 'supportEmail',
-          'whatsappPhone', 'bankName', 'bankBranch', 'accountName',
-          'accountNumber', 'swiftCode', 'bankAddress', 'invoiceValidityDays',
-          'exchangeRates', 'updatedAt'
-        ]) &&
-        isAdmin();
-
-      allow delete: if false;
+      allow create: if isValidOrderStatusCreate(request.resource.data, trackingCode) || isStaff();
+      allow update, delete: if isStaff();
     }
 
-    // 12. Admin Registry
-    match /admins/{adminUid} {
-      allow get: if isValidId(adminUid) && (isAdmin() || (isVerifiedUser() && request.auth.uid == adminUid));
-      allow list: if isAdmin();
+    match /companySettings/{docId} {
+      allow get: if docId in ['public', 'exportProfile'] || isStaff();
+      allow list: if isStaff();
+      allow create, update, delete: if isManagement();
+    }
 
-      allow create: if isValidId(adminUid) &&
-        isValidAdminUser(incoming()) &&
-        incoming().addedAt == request.time &&
-        isAdmin();
+    // =========================================================================
+    // 10. Landing Page CMS & Verified Customer Testimonials
+    // =========================================================================
 
-      allow update: if isValidId(adminUid) &&
-        isValidAdminUser(incoming()) &&
-        incoming().addedAt == existing().addedAt &&
-        incoming().diff(existing()).affectedKeys().hasOnly(['email', 'role']) &&
-        isAdmin();
+    match /landingContent/{docId} {
+      allow get: if docId == 'public' || isStaff();
+      allow list: if isStaff();
+      allow create, update, delete: if isManagement();
+    }
 
-      allow delete: if isValidId(adminUid) && isAdmin();
+    match /testimonials/{testimonialId} {
+      // Only approved reviews are visible publicly; staff can review drafts
+      allow get, list: if resource.data.approved == true || isStaff();
+      allow create, update: if isManagement() &&
+        isNonEmptyString(request.resource.data.customerName, 100) &&
+        isNonEmptyString(request.resource.data.country, 80) &&
+        isNonEmptyString(request.resource.data.vehiclePurchased, 120) &&
+        isNonEmptyString(request.resource.data.reviewText, 1200) &&
+        request.resource.data.rating is int &&
+        request.resource.data.rating >= 1 &&
+        request.resource.data.rating <= 5 &&
+        request.resource.data.approved is bool;
+      allow delete: if isManagement();
     }
   }
 }

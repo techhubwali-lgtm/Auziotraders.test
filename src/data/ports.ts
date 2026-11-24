@@ -1,3 +1,5 @@
+import { getCurrencyDescriptor } from './currencies';
+import { getWorldPortOptionById } from './worldCountriesPorts';
 import type {
   CifBreakdown,
   CurrencyCode,
@@ -33,10 +35,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   // East & Central Africa (Kenya, Tanzania, Uganda, Zambia, DR Congo)
   {
     id: 'mombasa-ke',
+    unLocode: 'KEMBA',
     name: 'Mombasa',
     country: 'Kenya',
+    countryCode: 'KE',
     region: 'East & Central Africa',
     corridorNote: 'Direct Ro-Ro discharge for Kenya importers',
+    rateAvailable: true,
     roroRatePerM3Usd: 96,
     container20ftUsd: 2650,
     container40ftUsd: 4200,
@@ -47,10 +52,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'dar-es-salaam-tz',
+    unLocode: 'TZDAR',
     name: 'Dar es Salaam',
     country: 'Tanzania',
+    countryCode: 'TZ',
     region: 'East & Central Africa',
     corridorNote: 'Direct Ro-Ro discharge for Tanzania importers',
+    rateAvailable: true,
     roroRatePerM3Usd: 98,
     container20ftUsd: 2700,
     container40ftUsd: 4300,
@@ -61,10 +69,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'kampala-mombasa-ug',
+    unLocode: 'KEMBA',
     name: 'Mombasa (Uganda Transit)',
     country: 'Uganda',
+    countryCode: 'UG',
     region: 'East & Central Africa',
     corridorNote: 'Sea discharge at Mombasa + bonded road transit to Kampala',
+    rateAvailable: true,
     roroRatePerM3Usd: 102,
     container20ftUsd: 2850,
     container40ftUsd: 4450,
@@ -75,10 +86,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'lusaka-dar-zm',
+    unLocode: 'TZDAR',
     name: 'Dar es Salaam (Zambia Transit)',
     country: 'Zambia',
+    countryCode: 'ZM',
     region: 'East & Central Africa',
     corridorNote: 'Sea discharge at Dar es Salaam + Nakonde corridor to Lusaka',
+    rateAvailable: true,
     roroRatePerM3Usd: 104,
     container20ftUsd: 2900,
     container40ftUsd: 4550,
@@ -89,10 +103,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'matadi-drc',
+    unLocode: 'CDMAT',
     name: 'Dar es Salaam / Matadi',
     country: 'DR Congo',
+    countryCode: 'CD',
     region: 'East & Central Africa',
     corridorNote: 'East corridor via Dar es Salaam (Lubumbashi) or West via Matadi',
+    rateAvailable: true,
     roroRatePerM3Usd: 124,
     container20ftUsd: 3350,
     container40ftUsd: 5250,
@@ -105,10 +122,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   // Southern Africa (South Africa, Zimbabwe, Mozambique)
   {
     id: 'durban-za',
+    unLocode: 'ZADUR',
     name: 'Durban',
     country: 'South Africa',
+    countryCode: 'ZA',
     region: 'Southern Africa',
     corridorNote: 'Primary Southern Africa Ro-Ro hub',
+    rateAvailable: true,
     roroRatePerM3Usd: 105,
     container20ftUsd: 2800,
     container40ftUsd: 4450,
@@ -119,10 +139,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'durban-harare-zw',
+    unLocode: 'ZADUR',
     name: 'Durban / Beira (Zimbabwe Transit)',
     country: 'Zimbabwe',
+    countryCode: 'ZW',
     region: 'Southern Africa',
     corridorNote: 'Bonded transit via Durban or Beira to Harare / Beitbridge',
+    rateAvailable: true,
     roroRatePerM3Usd: 112,
     container20ftUsd: 3000,
     container40ftUsd: 4700,
@@ -133,10 +156,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'maputo-mz',
+    unLocode: 'MZMPM',
     name: 'Maputo',
     country: 'Mozambique',
+    countryCode: 'MZ',
     region: 'Southern Africa',
     corridorNote: 'Direct Ro-Ro service for Mozambique & Southern corridor',
+    rateAvailable: true,
     roroRatePerM3Usd: 108,
     container20ftUsd: 2900,
     container40ftUsd: 4600,
@@ -149,10 +175,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   // Oceania (Australia, New Zealand)
   {
     id: 'sydney-au',
+    unLocode: 'AUPKL',
     name: 'Port Kembla / Sydney',
     country: 'Australia',
+    countryCode: 'AU',
     region: 'Oceania',
     corridorNote: 'Weekly Yokohama–Australia Ro-Ro liner',
+    rateAvailable: true,
     roroRatePerM3Usd: 88,
     container20ftUsd: 2450,
     container40ftUsd: 3950,
@@ -163,10 +192,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'brisbane-au',
+    unLocode: 'AUBNE',
     name: 'Brisbane',
     country: 'Australia',
+    countryCode: 'AU',
     region: 'Oceania',
     corridorNote: 'Fastest East Coast Australia transit',
+    rateAvailable: true,
     roroRatePerM3Usd: 84,
     container20ftUsd: 2350,
     container40ftUsd: 3800,
@@ -177,10 +209,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'auckland-nz',
+    unLocode: 'NZAKL',
     name: 'Auckland',
     country: 'New Zealand',
+    countryCode: 'NZ',
     region: 'Oceania',
     corridorNote: 'MPI & JEVIC certified Japan–NZ route',
+    rateAvailable: true,
     roroRatePerM3Usd: 90,
     container20ftUsd: 2500,
     container40ftUsd: 4000,
@@ -193,10 +228,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   // Caribbean (Jamaica, Bahamas)
   {
     id: 'kingston-jm',
+    unLocode: 'JMKIN',
     name: 'Kingston',
     country: 'Jamaica',
+    countryCode: 'JM',
     region: 'Caribbean',
     corridorNote: 'Panama Canal direct Ro-Ro liner',
+    rateAvailable: true,
     roroRatePerM3Usd: 138,
     container20ftUsd: 3650,
     container40ftUsd: 5600,
@@ -207,10 +245,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'nassau-bs',
+    unLocode: 'BSNAS',
     name: 'Nassau',
     country: 'Bahamas',
+    countryCode: 'BS',
     region: 'Caribbean',
     corridorNote: 'Regular Caribbean Ro-Ro transshipment',
+    rateAvailable: true,
     roroRatePerM3Usd: 146,
     container20ftUsd: 3900,
     container40ftUsd: 5950,
@@ -223,10 +264,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   // UK & Middle East (United Kingdom, UAE)
   {
     id: 'southampton-uk',
+    unLocode: 'GBSOU',
     name: 'Southampton',
     country: 'United Kingdom',
+    countryCode: 'GB',
     region: 'UK & Middle East',
     corridorNote: 'Direct UK Ro-Ro terminal with export translation',
+    rateAvailable: true,
     roroRatePerM3Usd: 122,
     container20ftUsd: 3250,
     container40ftUsd: 5100,
@@ -237,10 +281,13 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
   {
     id: 'jebel-ali-ae',
+    unLocode: 'AEJEA',
     name: 'Jebel Ali (Dubai)',
     country: 'United Arab Emirates',
+    countryCode: 'AE',
     region: 'UK & Middle East',
     corridorNote: 'High-frequency Gulf Ro-Ro & container hub',
+    rateAvailable: true,
     roroRatePerM3Usd: 86,
     container20ftUsd: 2250,
     container40ftUsd: 3650,
@@ -251,6 +298,8 @@ export const GLOBAL_PORTS: ShippingPort[] = [
   },
 ];
 
+// Accounting reference rates persisted in Firestore companySettings (used only for staff admin invoice form defaults;
+// public currency display uses live /api/exchange-rates and gracefully falls back to USD when unavailable).
 export const DEFAULT_EXCHANGE_RATES: ExchangeRates = {
   JPY: 152.5,
   EUR: 0.92,
@@ -263,7 +312,7 @@ export const DEFAULT_EXCHANGE_RATES: ExchangeRates = {
 };
 
 export const CURRENCY_META: Record<
-  CurrencyCode,
+  string,
   { symbol: string; label: string; name: string }
 > = {
   USD: { symbol: '$', label: 'USD', name: 'US Dollar' },
@@ -277,28 +326,86 @@ export const CURRENCY_META: Record<
   CAD: { symbol: 'C$', label: 'CAD', name: 'Canadian Dollar' },
 };
 
+export function hasLiveRateForCurrency(
+  currency: CurrencyCode,
+  liveRates?: Record<string, number>
+): boolean {
+  const code = (currency || 'USD').toUpperCase();
+  if (code === 'USD') return true;
+  if (!liveRates) return false;
+  const r = liveRates[code];
+  return typeof r === 'number' && Number.isFinite(r) && r > 0;
+}
+
 export function convertUsd(
   amountUsd: number,
   currency: CurrencyCode,
-  rates: ExchangeRates = DEFAULT_EXCHANGE_RATES
+  rates?: Record<string, number>
 ): number {
-  if (currency === 'USD') return amountUsd;
-  const rate = rates[currency] ?? DEFAULT_EXCHANGE_RATES[currency] ?? 1;
-  return amountUsd * rate;
+  const code = (currency || 'USD').toUpperCase();
+  if (code === 'USD') return amountUsd;
+  const rate = rates?.[code];
+  if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0) {
+    return amountUsd * rate;
+  }
+  // Never fabricate exchange rates if rate isn't available; keep USD value intact
+  return amountUsd;
 }
 
 export function formatMoney(
   amountUsd: number,
   currency: CurrencyCode,
-  rates: ExchangeRates = DEFAULT_EXCHANGE_RATES
+  rates?: Record<string, number>
 ): string {
-  const converted = Math.round(convertUsd(amountUsd, currency, rates));
-  const { symbol } = CURRENCY_META[currency];
-  return `${symbol}${converted.toLocaleString('en-US')}`;
+  const code = (currency || 'USD').toUpperCase();
+  if (code === 'USD') {
+    return `$${Math.round(amountUsd).toLocaleString('en-US')}`;
+  }
+
+  const rate = rates?.[code];
+  if (typeof rate === 'number' && Number.isFinite(rate) && rate > 0) {
+    const converted = Math.round(amountUsd * rate);
+    const descriptor = getCurrencyDescriptor(code);
+    const spacer = descriptor.symbol.length > 2 || /[A-Za-z]$/.test(descriptor.symbol) ? ' ' : '';
+    return `${descriptor.symbol}${spacer}${converted.toLocaleString('en-US')}`;
+  }
+
+  // Graceful fallback when live exchange rate for the selected currency is unavailable
+  return `$${Math.round(amountUsd).toLocaleString('en-US')} USD`;
+}
+
+export function isVerifiedShippingPort(portId: string): boolean {
+  return GLOBAL_PORTS.some((p) => p.id === portId);
 }
 
 export function getPortById(portId: string): ShippingPort {
-  return GLOBAL_PORTS.find((p) => p.id === portId) || GLOBAL_PORTS[0];
+  const verified = GLOBAL_PORTS.find((p) => p.id === portId);
+  if (verified) return verified;
+
+  const worldPort = getWorldPortOptionById(portId);
+  if (worldPort.verifiedPortId) {
+    const linked = GLOBAL_PORTS.find((p) => p.id === worldPort.verifiedPortId);
+    if (linked) return linked;
+  }
+
+  // Return an unrated ShippingPort object — NEVER invent shipping rates for unsupported routes
+  return {
+    id: worldPort.id,
+    unLocode: worldPort.unLocode,
+    name: worldPort.name,
+    country: worldPort.countryName,
+    countryCode: worldPort.countryCode,
+    region: worldPort.region,
+    corridorNote: 'Custom shipping quotation required from Yokohama export desk',
+    rateAvailable: false,
+    roroRatePerM3Usd: 0,
+    container20ftUsd: 0,
+    container40ftUsd: 0,
+    inspectionName: 'Destination Inspection (Quoted on Request)',
+    inspectionFeeUsd: 0,
+    transitDaysMin: 0,
+    transitDaysMax: 0,
+  };
 }
 
 export function calculateCif(params: {
@@ -309,8 +416,25 @@ export function calculateCif(params: {
   includeInsurance: boolean;
 }): CifBreakdown {
   const port = getPortById(params.portId);
-  let freightUsd = 0;
+  const rateAvailable = port.rateAvailable !== false && port.roroRatePerM3Usd > 0;
 
+  if (!rateAvailable) {
+    return {
+      fobUsd: Math.round(params.fobUsd),
+      freightUsd: 0,
+      inspectionUsd: 0,
+      inspectionLabel: 'Custom Quote Required',
+      insuranceUsd: 0,
+      totalCifUsd: Math.round(params.fobUsd),
+      transitDaysRange: 'Quote on Request',
+      port,
+      shippingMethod: params.shippingMethod,
+      includeInsurance: params.includeInsurance,
+      rateAvailable: false,
+    };
+  }
+
+  let freightUsd = 0;
   if (params.shippingMethod === 'roro') {
     freightUsd = Math.round(params.volumeM3 * port.roroRatePerM3Usd);
   } else if (params.shippingMethod === 'container_20ft') {
@@ -339,6 +463,7 @@ export function calculateCif(params: {
     port,
     shippingMethod: params.shippingMethod,
     includeInsurance: params.includeInsurance,
+    rateAvailable: true,
   };
 }
 

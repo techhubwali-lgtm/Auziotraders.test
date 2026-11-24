@@ -25,6 +25,44 @@
   font-variant-numeric: tabular-nums;
 }
 
+@keyframes auzioHeroSlowPan {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.045);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@keyframes auzioRouteDash {
+  to {
+    stroke-dashoffset: -44;
+  }
+}
+
+.auzio-hero-zoom {
+  animation: auzioHeroSlowPan 22s ease-in-out infinite;
+  will-change: transform;
+}
+
+.auzio-route-dash {
+  animation: auzioRouteDash 3.6s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  .auzio-hero-zoom,
+  .auzio-route-dash {
+    animation: none !important;
+  }
+}
+
 @media print {
   @page {
     size: A4;

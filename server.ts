@@ -10,6 +10,7 @@ import {
   getAuctionStatus,
   searchLiveAuctions,
 } from './server/auctionProxy';
+import { getLiveExchangeRates } from './server/exchangeRates';
 import type { AuctionFeedTable, SteeringType } from './src/types/portal';
 
 function resolveAppDir(): string {
@@ -152,6 +153,16 @@ async function startServer() {
     });
     res.setHeader('Cache-Control', 'public, max-age=180');
     res.status(detail.ok ? 200 : 400).json(detail);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Live Global Exchange Rates (ISO 4217, cached 60m, zero fake fallback rates)
+  // ---------------------------------------------------------------------------
+  app.get('/api/exchange-rates', async (req, res) => {
+    const force = req.query.refresh === '1';
+    const data = await getLiveExchangeRates(force);
+    res.setHeader('Cache-Control', data.ok ? 'public, max-age=900' : 'no-store');
+    res.status(data.ok ? 200 : 503).json(data);
   });
 
   const httpServer = http.createServer(app);

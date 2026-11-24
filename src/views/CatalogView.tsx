@@ -47,14 +47,21 @@ interface CatalogViewProps {
   currency: CurrencyCode;
   selectedPortId: string;
   settings: CompanySettings;
+  liveFxRates?: Record<string, number>;
+  externalSourceMode?: 'curated' | 'live_auctions';
+  externalFilters?: Partial<CatalogFilterState> | null;
+  externalSearchNonce?: number;
+  embedded?: boolean;
   compareIds: string[];
   canImportToFirestore: boolean;
+  onSourceModeChange?: (mode: 'curated' | 'live_auctions') => void;
   onRegisterLiveVehicles: (items: Vehicle[]) => void;
   onImportLiveLot: (vehicle: Vehicle) => void;
   onToggleCompare: (vehicleId: string) => void;
   onSelectVehicle: (vehicle: Vehicle) => void;
   onOpenProforma: (params: { vehicle: Vehicle; cif: CifBreakdown }) => void;
   onStartBidRequest: (vehicle: Vehicle) => void;
+  onRequestShippingQuote?: (vehicle: Vehicle) => void;
   onOpenSourcingWizard: () => void;
   onOpenWorkflowStatus: () => void;
   onNavigateShipping: () => void;
@@ -88,22 +95,55 @@ export function CatalogView({
   currency,
   selectedPortId,
   settings,
+  liveFxRates,
+  externalSourceMode,
+  externalFilters,
+  externalSearchNonce,
+  embedded = false,
   compareIds,
   canImportToFirestore,
+  onSourceModeChange,
   onRegisterLiveVehicles,
   onImportLiveLot,
   onToggleCompare,
   onSelectVehicle,
   onOpenProforma,
   onStartBidRequest,
+  onRequestShippingQuote,
   onOpenSourcingWizard,
   onOpenWorkflowStatus,
   onNavigateShipping,
 }: CatalogViewProps) {
-  const [sourceMode, setSourceMode] = useState<CatalogSourceMode>('curated');
-  const [filters, setFilters] = useState<CatalogFilterState>(INITIAL_FILTERS);
+  const [sourceMode, setSourceModeState] = useState<CatalogSourceMode>(
+    externalSourceMode || 'curated'
+  );
+  const [filters, setFilters] = useState<CatalogFilterState>({
+    ...INITIAL_FILTERS,
+    ...(externalFilters || {}),
+  });
   const [sortBy, setSortBy] = useState<SortKey>('featured');
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+
+  const setSourceMode = useCallback(
+    (next: CatalogSourceMode) => {
+      setSourceModeState(next);
+      onSourceModeChange?.(next);
+    },
+    [onSourceModeChange]
+  );
+
+  useEffect(() => {
+    if (externalSourceMode) {
+      setSourceModeState(externalSourceMode);
+    }
+  }, [externalSourceMode]);
+
+  useEffect(() => {
+    if (externalFilters) {
+      setFilters({ ...INITIAL_FILTERS, ...externalFilters });
+      setLivePage(1);
+    }
+  }, [externalFilters, externalSearchNonce]);
 
   // Live AJES / auc.auziotraders.com state
   const [liveMeta, setLiveMeta] = useState<LiveAuctionMetaResponse | null>(null);
@@ -121,7 +161,7 @@ export function CatalogView({
   const [liveRefreshTick, setLiveRefreshTick] = useState(0);
 
   const activePort = useMemo(() => getPortById(selectedPortId), [selectedPortId]);
-  const fmt = (usd: number) => formatMoney(usd, currency, settings.exchangeRates);
+  const fmt = (usd: number) => formatMoney(usd, currency, liveFxRates || settings.exchangeRates);
 
   // Fetch live make/model metadata from auc.auziotraders.com once on mount
   useEffect(() => {
@@ -443,81 +483,83 @@ export function CatalogView({
       : filteredVehicles.length;
 
   return (
-    <div className="space-y-6 pb-16">
-      {/* Compact Yokohama Export Hero */}
-      <section className="relative bg-slate-950 text-white overflow-hidden border-b border-slate-800">
-        <div className="absolute inset-0">
-          <img
-            src={HERO_EXPORT_IMAGE}
-            alt="AUZIO TRADERS Yokohama Ro-Ro export terminal"
-            className="w-full h-full object-cover object-center opacity-35"
-          />
-          <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/45" />
-        </div>
+    <div className={embedded ? 'space-y-6' : 'space-y-6 pb-16'}>
+      {/* Compact Yokohama Export Hero (hidden when embedded on unified Home page) */}
+      {!embedded && (
+        <section className="relative bg-slate-950 text-white overflow-hidden border-b border-slate-800">
+          <div className="absolute inset-0">
+            <img
+              src={HERO_EXPORT_IMAGE}
+              alt="AUZIO TRADERS Yokohama Ro-Ro export terminal"
+              className="w-full h-full object-cover object-center opacity-35"
+            />
+            <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-slate-950/45" />
+          </div>
 
-        <div className="relative max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-9 lg:py-11">
-          <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
-            <div className="max-w-2xl space-y-3">
-              <div className="inline-flex items-center gap-2 text-xs font-mono text-amber-400 tracking-wide">
-                <span>YOKOHAMA · NAGOYA · KOBE · OSAKA</span>
-                <span className="text-slate-600">|</span>
-                <span>DIRECT JAPAN EXPORT DESK</span>
+          <div className="relative max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 py-9 lg:py-11">
+            <div className="flex flex-col lg:flex-row lg:items-end justify-between gap-6">
+              <div className="max-w-2xl space-y-3">
+                <div className="inline-flex items-center gap-2 text-xs font-mono text-amber-400 tracking-wide">
+                  <span>YOKOHAMA · NAGOYA · KOBE · OSAKA</span>
+                  <span className="text-slate-600">|</span>
+                  <span>DIRECT JAPAN EXPORT DESK</span>
+                </div>
+
+                <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight leading-[1.15] text-white">
+                  Japanese Used Vehicles Sourced, Inspected &amp; Shipped CIF to Your Port.
+                </h1>
+
+                <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-xl">
+                  Transparent landed CIF pricing to{' '}
+                  <span className="text-white font-semibold">
+                    {activePort.name}, {activePort.country}
+                  </span>{' '}
+                  ({activePort.transitDaysMin}–{activePort.transitDaysMax} days est. transit).
+                  Browse AUZIO Direct Stock or search live Japanese auctions from{' '}
+                  <span className="font-mono text-amber-300">auc.auziotraders.com</span>.
+                </p>
               </div>
 
-              <h1 className="text-2xl sm:text-3xl lg:text-4xl font-extrabold tracking-tight leading-[1.15] text-white">
-                Japanese Used Vehicles Sourced, Inspected &amp; Shipped CIF to Your Port.
-              </h1>
-
-              <p className="text-xs sm:text-sm text-slate-300 leading-relaxed max-w-xl">
-                Transparent landed CIF pricing to{' '}
-                <span className="text-white font-semibold">
-                  {activePort.name}, {activePort.country}
-                </span>{' '}
-                ({activePort.transitDaysMin}–{activePort.transitDaysMax} days est. transit).
-                Browse AUZIO Direct Stock or search live Japanese auctions from{' '}
-                <span className="font-mono text-amber-300">auc.auziotraders.com</span>.
-              </p>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2.5 shrink-0">
-              <button
-                type="button"
-                onClick={() => {
-                  setSourceMode('live_auctions');
-                  setLivePage(1);
-                  jumpToResults();
-                }}
-                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors cursor-pointer"
-              >
-                <Radio className="w-4 h-4" />
-                Browse Live Japanese Auctions
-                {liveMeta?.ok && liveMeta.totalEstimatedLots > 0
-                  ? ` (${liveMeta.totalEstimatedLots.toLocaleString()})`
-                  : ''}
-              </button>
-              <button
-                type="button"
-                onClick={onOpenSourcingWizard}
-                className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-slate-200 bg-slate-900 border border-slate-700 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <Gavel className="w-4 h-4 text-amber-400" />
-                Submit Custom Sourcing Request
-              </button>
-              <button
-                type="button"
-                onClick={onNavigateShipping}
-                className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-slate-200 bg-slate-900 border border-slate-700 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <Ship className="w-4 h-4 text-amber-400" />
-                14-Country Tariffs
-              </button>
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSourceMode('live_auctions');
+                    setLivePage(1);
+                    jumpToResults();
+                  }}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors cursor-pointer"
+                >
+                  <Radio className="w-4 h-4" />
+                  Browse Live Japanese Auctions
+                  {liveMeta?.ok && liveMeta.totalEstimatedLots > 0
+                    ? ` (${liveMeta.totalEstimatedLots.toLocaleString()})`
+                    : ''}
+                </button>
+                <button
+                  type="button"
+                  onClick={onOpenSourcingWizard}
+                  className="inline-flex items-center gap-2 px-4 py-2.5 text-xs font-semibold text-slate-200 bg-slate-900 border border-slate-700 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <Gavel className="w-4 h-4 text-amber-400" />
+                  Submit Custom Sourcing Request
+                </button>
+                <button
+                  type="button"
+                  onClick={onNavigateShipping}
+                  className="inline-flex items-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-slate-200 bg-slate-900 border border-slate-700 rounded-lg hover:bg-slate-800 transition-colors cursor-pointer"
+                >
+                  <Ship className="w-4 h-4 text-amber-400" />
+                  14-Country Tariffs
+                </button>
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Main Storefront Container */}
-      <div className="max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+      <div className={embedded ? 'max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6' : 'max-w-[1400px] mx-auto px-4 sm:px-6 lg:px-8 space-y-6'}>
         {/* BE FORWARD-Style Top Amber SEARCH FOR CARS Filter Banner */}
         <SearchFilterBanner
           filters={filters}
@@ -1146,15 +1188,21 @@ export function CatalogView({
                             <div className="flex items-baseline justify-between bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2">
                               <div className="min-w-0 pr-2">
                                 <div className="text-[11px] font-semibold text-slate-900">
-                                  Est. CIF Total
+                                  {cif.rateAvailable ? 'Est. CIF Total' : 'Ocean Shipping'}
                                 </div>
                                 <div className="text-[10px] text-slate-500 truncate">
                                   to {activePort.name}
                                 </div>
                               </div>
-                              <div className="text-base font-bold font-mono tabular-nums text-amber-700 shrink-0">
-                                {fmt(cif.totalCifUsd)}
-                              </div>
+                              {cif.rateAvailable ? (
+                                <div className="text-base font-bold font-mono tabular-nums text-amber-700 shrink-0">
+                                  {fmt(cif.totalCifUsd)}
+                                </div>
+                              ) : (
+                                <div className="text-xs font-bold text-slate-700 shrink-0">
+                                  Custom Quote
+                                </div>
+                              )}
                             </div>
                           </div>
 
@@ -1168,7 +1216,19 @@ export function CatalogView({
                               >
                                 {isLiveFeed ? 'Sheet & CIF' : 'View Specs'}
                               </button>
-                              {isAuction ? (
+                              {!cif.rateAvailable ? (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    onRequestShippingQuote
+                                      ? onRequestShippingQuote(vehicle)
+                                      : onStartBidRequest(vehicle)
+                                  }
+                                  className="py-2 px-2.5 text-xs font-semibold text-slate-950 bg-amber-500 hover:bg-amber-600 rounded-lg transition-colors cursor-pointer whitespace-nowrap"
+                                >
+                                  Request Quote
+                                </button>
+                              ) : isAuction ? (
                                 <button
                                   type="button"
                                   onClick={() => onStartBidRequest(vehicle)}

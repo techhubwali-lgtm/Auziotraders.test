@@ -1,16 +1,19 @@
 import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
-import { CheckCircle2, X } from 'lucide-react';
+import { CheckCircle2, GitCompare, X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AdminVehicleModal } from './components/AdminVehicleModal';
 import { ComparisonModal } from './components/ComparisonModal';
-import { DualLoginModal } from './components/DualLoginModal';
 import { ErrorBoundary } from './components/ErrorBoundary';
+import { FloatingUtilities } from './components/FloatingUtilities';
 import { Footer } from './components/Footer';
+import { LegalPolicyModal, type LegalPolicyType } from './components/LegalPolicyModal';
 import { Navbar } from './components/Navbar';
 import { ProformaInvoiceModal } from './components/ProformaInvoiceModal';
 import { QuickQuoteModal } from './components/QuickQuoteModal';
+import { UniversalLoginModal } from './components/UniversalLoginModal';
 import { VehicleDetailModal } from './components/VehicleDetailModal';
 import { WorkflowStatusModal } from './components/WorkflowStatusModal';
+import { DEFAULT_LANDING_CONTENT } from './data/landingDefaults';
 import { calculateCif } from './data/ports';
 import {
   DEFAULT_COMPANY_SETTINGS,
@@ -23,7 +26,12 @@ import {
   SEED_SOURCING_REQUESTS,
   SEED_VEHICLES,
 } from './data/seedData';
+import {
+  getWorldCountryByCode,
+  getWorldCountryByPortId,
+} from './data/worldCountriesPorts';
 import { auth, googleProvider } from './lib/firebase';
+import { fetchLiveExchangeRates } from './services/exchangeRateService';
 import {
   adminUpdateUser,
   clearSampleTradeData,
@@ -32,22 +40,29 @@ import {
   createQuotation,
   createSourcingRequest,
   deleteExportDocument,
+  deleteTestimonial,
   deleteVehicle,
   getUserProfile,
   placeAuctionBidWithGuard,
   postOrderMessage,
   recordAuditLog,
+  registerCustomerProfile,
   respondToQuotation,
   saveCompanySettings,
+  saveLandingContent,
+  saveTestimonial,
   seedFullTradeDatabase,
+  submitBuyerInquiry,
   subscribeAuditLogs,
   subscribeCompanySettings,
   subscribeDocuments,
   subscribeInquiries,
+  subscribeLandingContent,
   subscribeOrderMessages,
   subscribeOrders,
   subscribeQuotations,
   subscribeSourcingRequests,
+  subscribeTestimonials,
   subscribeUsers,
   subscribeVehicles,
   toggleDocumentVisibility,
@@ -62,10 +77,12 @@ import type {
   CifBreakdown,
   CompanySettings,
   CurrencyCode,
+  CustomerTestimonial,
   ExportDocument,
   ExportOrder,
   Inquiry,
-  LoginPortalType,
+  LandingPageContent,
+  LiveExchangeRateState,
   OrderMessage,
   ProformaDraft,
   Quotation,
@@ -76,14 +93,25 @@ import type {
   UserRole,
   Vehicle,
 } from './types/portal';
-import { CatalogView } from './views/CatalogView';
 import { CustomerPortalView, type CustomerPortalTab } from './views/CustomerPortalView';
 import { HowToBuyView } from './views/HowToBuyView';
+import { LandingView } from './views/LandingView';
 import { OrderTrackerView } from './views/OrderTrackerView';
 import { ShippingRatesView } from './views/ShippingRatesView';
 import { StaffConsoleView } from './views/StaffConsoleView';
 
 const BOOTSTRAP_ADMIN_EMAIL = 'techhub.wali@gmail.com';
+const STORAGE_CURRENCY_KEY = 'auzio_currency_v2';
+const STORAGE_COUNTRY_KEY = 'auzio_country_v2';
+const STORAGE_PORT_KEY = 'auzio_port_v2';
+
+function readStorage(key: string, fallback: string): string {
+  try {
+    return localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
 
 function createInvoiceNumber(): string {
   const d = new Date();
@@ -97,25 +125,53 @@ function addDaysIso(days: number): string {
   return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
 }
 
-export default function App() {
-  // Navigation & Global Trade Preferences
-  const [activeView, setActiveView] = useState<AppView>('catalog');
-  const [customerTab, setCustomerTab] = useState<CustomerPortalTab>('profile');
-  const [currency, setCurrency] = useState<CurrencyCode>('USD');
-  const [selectedPortId, setSelectedPortId] = useState<string>('mombasa-ke');
+function isStaffRole(role: UserRole): boolean {
+  return ['sales', 'accounts', 'operations', 'management', 'admin'].includes(role);
+}
 
-  // Auth & Dual Portal State
+function isBuyerRole(role: UserRole): boolean {
+  return role === 'customer' || role === 'dealer';
+}
+
+export default function App() {
+  // Navigation & Global Trade Preferences (persisted in localStorage)
+  const [activeView, setActiveView] = useState<AppView>('home');
+  const [catalogSourceMode, setCatalogSourceMode] = useState<'curated' | 'live_auctions'>('curated');
+
+  const [customerTab, setCustomerTab] = useState<CustomerPortalTab>('profile');
+  const [currency, setCurrencyState] = useState<CurrencyCode>(() =>
+    readStorage(STORAGE_CURRENCY_KEY, 'USD')
+  );
+  const [selectedCountryCode, setSelectedCountryCode] = useState<string>(() =>
+    readStorage(STORAGE_COUNTRY_KEY, 'KE')
+  );
+  const [selectedPortId, setSelectedPortIdState] = useState<string>(() =>
+    readStorage(STORAGE_PORT_KEY, 'mombasa-ke')
+  );
+
+  // Live Exchange Rates State (zero fake fallback rates)
+  const [liveFx, setLiveFx] = useState<LiveExchangeRateState>({
+    ok: false,
+    loading: true,
+    base: 'USD',
+    rates: { USD: 1 },
+    updatedAt: null,
+    provider: 'ExchangeRate-API',
+  });
+
+  // Auth & Universal Login State
   const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [cloudProfile, setCloudProfile] = useState<UserProfile | null>(null);
-  const [demoRoleOverride, setDemoRoleOverride] = useState<UserRole | null>(null);
-  const [demoCustomerUid, setDemoCustomerUid] = useState<string>('cust-kenya-01');
-  const [loginModalPortal, setLoginModalPortal] = useState<LoginPortalType | null>(null);
-  const [needsCustomerRegistration, setNeedsCustomerRegistration] = useState(false);
-  const [crossPortalError, setCrossPortalError] = useState('');
+  const [loginModalOpen, setLoginModalOpen] = useState(false);
+  const [needsProfileCompletion, setNeedsProfileCompletion] = useState(false);
+  const [authError, setAuthError] = useState('');
+  const [isSigningIn, setIsSigningIn] = useState(false);
 
   // Cloud Datasets
   const [cloudVehicles, setCloudVehicles] = useState<Vehicle[]>([]);
   const [settings, setSettings] = useState<CompanySettings>(DEFAULT_COMPANY_SETTINGS);
+  const [landingContent, setLandingContent] = useState<LandingPageContent>(DEFAULT_LANDING_CONTENT);
+  const [testimonials, setTestimonials] = useState<CustomerTestimonial[]>([]);
   const [cloudUsers, setCloudUsers] = useState<UserProfile[]>([]);
   const [cloudRequests, setCloudRequests] = useState<SourcingRequest[]>([]);
   const [cloudQuotations, setCloudQuotations] = useState<Quotation[]>([]);
@@ -125,7 +181,7 @@ export default function App() {
   const [cloudAuditLogs, setCloudAuditLogs] = useState<AuditLogEntry[]>([]);
   const [cloudInquiries, setCloudInquiries] = useState<Inquiry[]>([]);
 
-  // Local interactive demo-preview state (used seamlessly when testing roles without Firebase login)
+  // Local fallback datasets for non-populated collections
   const [localUsers, setLocalUsers] = useState<UserProfile[]>(DEMO_USERS);
   const [localRequests, setLocalRequests] = useState<SourcingRequest[]>(SEED_SOURCING_REQUESTS);
   const [localQuotations, setLocalQuotations] = useState<Quotation[]>(SEED_QUOTATIONS);
@@ -134,12 +190,13 @@ export default function App() {
   const [localDocs, setLocalDocs] = useState<ExportDocument[]>(SEED_DOCUMENTS);
   const [localAuditLogs, setLocalAuditLogs] = useState<AuditLogEntry[]>(SEED_AUDIT_LOGS);
 
-  // Modals & Interactive Overlays
+  // Modals & Overlays
   const [compareIds, setCompareIds] = useState<string[]>([]);
   const [compareOpen, setCompareOpen] = useState(false);
   const [selectedVehicle, setSelectedVehicle] = useState<Vehicle | null>(null);
   const [prefillSourcingVehicle, setPrefillSourcingVehicle] = useState<Vehicle | null>(null);
   const [workflowModalOpen, setWorkflowModalOpen] = useState(false);
+  const [activePolicy, setActivePolicy] = useState<LegalPolicyType | null>(null);
   const [proformaDraft, setProformaDraft] = useState<ProformaDraft | null>(null);
   const [quickQuoteConfig, setQuickQuoteConfig] = useState<{
     vehicleId?: string;
@@ -159,25 +216,108 @@ export default function App() {
     }, 4500);
   }, []);
 
+  // Persist Currency, Country, Port & Wishlist preferences
+  const handleCurrencyChange = useCallback((code: CurrencyCode) => {
+    setCurrencyState(code);
+    try {
+      localStorage.setItem(STORAGE_CURRENCY_KEY, code);
+    } catch {
+      // Ignore storage errors
+    }
+  }, []);
+
+  const handlePortChange = useCallback(
+    (portId: string, silent = false) => {
+      setSelectedPortIdState(portId);
+      const matchedCountry = getWorldCountryByPortId(portId);
+      setSelectedCountryCode(matchedCountry.code);
+      try {
+        localStorage.setItem(STORAGE_PORT_KEY, portId);
+        localStorage.setItem(STORAGE_COUNTRY_KEY, matchedCountry.code);
+      } catch {
+        // Ignore storage errors
+      }
+      if (!silent) {
+        notify(`Destination updated to ${matchedCountry.name}`);
+      }
+    },
+    [notify]
+  );
+
+  const handleCountryChange = useCallback(
+    (countryCode: string) => {
+      const country = getWorldCountryByCode(countryCode);
+      setSelectedCountryCode(country.code);
+      const defaultPort = country.ports[0]?.id || 'mombasa-ke';
+      setSelectedPortIdState(defaultPort);
+      try {
+        localStorage.setItem(STORAGE_COUNTRY_KEY, country.code);
+        localStorage.setItem(STORAGE_PORT_KEY, defaultPort);
+      } catch {
+        // Ignore storage errors
+      }
+      notify(
+        country.supportedShipping
+          ? `Shipping destination set to ${country.name} (${country.ports[0]?.name})`
+          : `Destination set to ${country.name} — Custom shipping quote available`
+      );
+    },
+    [notify]
+  );
+
+  // Fetch live exchange rates on mount & on manual refresh
+  const loadExchangeRates = useCallback(async (force = false) => {
+    setLiveFx((prev) => ({ ...prev, loading: true }));
+    const res = await fetchLiveExchangeRates(force);
+    setLiveFx(res);
+  }, []);
+
+  useEffect(() => {
+    void loadExchangeRates(false);
+  }, [loadExchangeRates]);
+
+  // Sync dynamic SEO metadata from Landing CMS
+  useEffect(() => {
+    if (landingContent.seoTitle) {
+      document.title = landingContent.seoTitle;
+    }
+    const metaDesc = document.querySelector('meta[name="description"]');
+    if (metaDesc && landingContent.seoDescription) {
+      metaDesc.setAttribute('content', landingContent.seoDescription);
+    }
+  }, [landingContent.seoTitle, landingContent.seoDescription]);
+
+  // Merge live FX rates into settings passed to child views (keep accounting USD base intact)
+  const effectiveSettings = useMemo<CompanySettings>(() => {
+    if (!liveFx.ok) return settings;
+    return {
+      ...settings,
+      exchangeRates: {
+        ...settings.exchangeRates,
+        ...liveFx.rates,
+      },
+    };
+  }, [settings, liveFx]);
+
   // Resolve real Firebase Auth session & profile
   useEffect(() => {
     const unsub = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       if (!user) {
         setCloudProfile(null);
-        setNeedsCustomerRegistration(false);
+        setNeedsProfileCompletion(false);
         return;
       }
       const existing = await getUserProfile(user.uid);
       if (existing) {
         setCloudProfile(existing);
-        setNeedsCustomerRegistration(false);
-        if (existing.defaultPortId) setSelectedPortId(existing.defaultPortId);
+        setNeedsProfileCompletion(false);
+        if (existing.defaultPortId) handlePortChange(existing.defaultPortId, true);
       } else if (user.email === BOOTSTRAP_ADMIN_EMAIL && user.emailVerified) {
         setCloudProfile({
           uid: user.uid,
           email: user.email,
-          displayName: user.displayName || 'AUZIO Trade Director',
+          displayName: user.displayName || 'Auzio Trade Director',
           role: 'admin',
           companyName: 'AUZIO TRADERS HQ',
           country: 'Japan',
@@ -188,61 +328,44 @@ export default function App() {
           assignedRepEmail: '',
           verified: true,
         });
-        setNeedsCustomerRegistration(false);
+        setNeedsProfileCompletion(false);
       } else {
         setCloudProfile(null);
       }
     });
     return () => unsub();
-  }, []);
+  }, [handlePortChange]);
 
-  // Compute effective role & profile (real Firebase auth unless overridden by Quick-Demo Role Switcher)
-  const effectiveRole: UserRole = useMemo(() => {
-    if (demoRoleOverride !== null) return demoRoleOverride;
-    if (cloudProfile) return cloudProfile.role;
-    return 'visitor';
-  }, [demoRoleOverride, cloudProfile]);
+  const effectiveRole: UserRole = cloudProfile ? cloudProfile.role : 'visitor';
+  const isAuthenticated = Boolean(firebaseUser && firebaseUser.emailVerified && cloudProfile);
+  const isLiveFirestoreMode = isAuthenticated;
+  const activeProfile: UserProfile | null = cloudProfile;
 
-  const isLiveFirestoreMode = Boolean(
-    firebaseUser && firebaseUser.emailVerified && demoRoleOverride === null && cloudProfile
-  );
-
-  const activeProfile: UserProfile | null = useMemo(() => {
-    if (effectiveRole === 'visitor') return null;
-    if (isLiveFirestoreMode && cloudProfile) return cloudProfile;
-    if (effectiveRole === 'customer') {
-      return (
-        localUsers.find((u) => u.uid === demoCustomerUid) ||
-        localUsers.find((u) => u.role === 'customer') ||
-        null
-      );
-    }
-    return localUsers.find((u) => u.role === effectiveRole) || null;
-  }, [effectiveRole, isLiveFirestoreMode, cloudProfile, localUsers, demoCustomerUid]);
-
-  // Public subscriptions (always safe per firestore.rules)
+  // Public Firestore subscriptions
   useEffect(() => {
     const unsubV = subscribeVehicles((list) => setCloudVehicles(list));
     const unsubS = subscribeCompanySettings((s) => setSettings(s));
+    const unsubL = subscribeLandingContent((c) => setLandingContent(c));
     return () => {
       unsubV();
       unsubS();
+      unsubL();
     };
   }, []);
 
   // Role-scoped authenticated Firestore subscriptions
-  const realStaff = Boolean(
-    firebaseUser?.emailVerified &&
-      cloudProfile &&
-      (cloudProfile.role === 'sales' ||
-        cloudProfile.role === 'operations' ||
-        cloudProfile.role === 'admin')
-  );
+  const realStaff = Boolean(isAuthenticated && isStaffRole(effectiveRole));
   const realAdmin = Boolean(
-    firebaseUser?.emailVerified && cloudProfile && cloudProfile.role === 'admin'
+    isAuthenticated && (effectiveRole === 'admin' || effectiveRole === 'management')
   );
   const realCustomerUid =
-    firebaseUser?.emailVerified && cloudProfile?.role === 'customer' ? firebaseUser.uid : null;
+    isAuthenticated && isBuyerRole(effectiveRole) && firebaseUser ? firebaseUser.uid : null;
+
+  // Subscribe to testimonials (public gets approved only; staff gets all for moderation)
+  useEffect(() => {
+    const unsubT = subscribeTestimonials(realStaff, setTestimonials);
+    return () => unsubT();
+  }, [realStaff]);
 
   useEffect(() => {
     const unsubs: (() => void)[] = [];
@@ -279,7 +402,7 @@ export default function App() {
     };
   }, [realStaff, realAdmin, realCustomerUid]);
 
-  // Resolved datasets (live cloud data when present, clean fallback to SEED data for preview/unseeded DB)
+  // Resolved datasets
   const vehicles = useMemo(
     () => (cloudVehicles.length > 0 ? cloudVehicles : SEED_VEHICLES),
     [cloudVehicles]
@@ -290,115 +413,143 @@ export default function App() {
   );
 
   const users = isLiveFirestoreMode && cloudUsers.length > 0 ? cloudUsers : localUsers;
-  const sourcingRequests =
-    isLiveFirestoreMode && cloudRequests.length > 0 ? cloudRequests : isLiveFirestoreMode ? cloudRequests : localRequests;
-  const quotations =
-    isLiveFirestoreMode && cloudQuotations.length > 0 ? cloudQuotations : isLiveFirestoreMode ? cloudQuotations : localQuotations;
-  const orders =
-    isLiveFirestoreMode && cloudOrders.length > 0 ? cloudOrders : isLiveFirestoreMode ? cloudOrders : localOrders;
-  const messages =
-    isLiveFirestoreMode && cloudMessages.length > 0 ? cloudMessages : isLiveFirestoreMode ? cloudMessages : localMessages;
-  const documents =
-    isLiveFirestoreMode && cloudDocs.length > 0 ? cloudDocs : isLiveFirestoreMode ? cloudDocs : localDocs;
-  const auditLogs =
-    isLiveFirestoreMode && cloudAuditLogs.length > 0 ? cloudAuditLogs : localAuditLogs;
+  const sourcingRequests = isLiveFirestoreMode ? cloudRequests : localRequests;
+  const quotations = isLiveFirestoreMode ? cloudQuotations : localQuotations;
+  const orders = isLiveFirestoreMode ? cloudOrders : localOrders;
+  const messages = isLiveFirestoreMode ? cloudMessages : localMessages;
+  const documents = isLiveFirestoreMode ? cloudDocs : localDocs;
+  const auditLogs = isLiveFirestoreMode ? cloudAuditLogs : localAuditLogs;
 
-  // Dual Login Flow with Strict Cross-Portal Blocking
-  const handleGoogleSignIn = async (portal: LoginPortalType) => {
-    setCrossPortalError('');
-    setNeedsCustomerRegistration(false);
-    const cred = await signInWithPopup(auth, googleProvider);
-    const user = cred.user;
-    const profile = await getUserProfile(user.uid);
-    const isBootstrapAdmin = user.email === BOOTSTRAP_ADMIN_EMAIL && user.emailVerified;
+  // Universal Login Flow — automatically identifies assigned role & routes user
+  const handleUniversalGoogleSignIn = async () => {
+    setAuthError('');
+    setIsSigningIn(true);
+    try {
+      const cred = await signInWithPopup(auth, googleProvider);
+      const user = cred.user;
+      const profile = await getUserProfile(user.uid);
+      const isBootstrapAdmin = user.email === BOOTSTRAP_ADMIN_EMAIL && user.emailVerified;
 
-    if (portal === 'customer') {
-      if (isBootstrapAdmin || (profile && profile.role !== 'customer')) {
-        await signOut(auth);
-        setCrossPortalError(
-          'Access Blocked: This Google account belongs to AUZIO TRADERS Staff/Management. Please sign in through the Management / Staff / Admin Login Portal instead.'
-        );
+      if (profile) {
+        setCloudProfile(profile);
+        setNeedsProfileCompletion(false);
+        setLoginModalOpen(false);
+        if (profile.defaultPortId) handlePortChange(profile.defaultPortId, true);
+
+        if (isStaffRole(profile.role)) {
+          setActiveView('staff_console');
+          void recordAuditLog({
+            actorRole: profile.role,
+            action: 'staff_login_success',
+            targetType: 'user',
+            targetId: user.uid,
+            summary: `Team member signed in: ${user.email} (${profile.role}).`,
+          });
+          notify(`Welcome back, ${profile.displayName}`);
+        } else {
+          setActiveView('customer_portal');
+          void recordAuditLog({
+            actorRole: profile.role,
+            action: 'login_success',
+            targetType: 'user',
+            targetId: user.uid,
+            summary: `Buyer signed in: ${profile.companyName || profile.displayName}.`,
+          });
+          notify(`Signed in to your Buyer Portal (${profile.companyName || profile.displayName})`);
+        }
         return;
       }
-      if (!profile) {
-        setNeedsCustomerRegistration(true);
+
+      if (isBootstrapAdmin) {
+        const adminProfile: UserProfile = {
+          uid: user.uid,
+          email: user.email || BOOTSTRAP_ADMIN_EMAIL,
+          displayName: user.displayName || 'Auzio Trade Director',
+          role: 'admin',
+          companyName: 'AUZIO TRADERS HQ',
+          country: 'Japan',
+          defaultPortId: 'mombasa-ke',
+          phone: '+81-45-550-8924',
+          consigneeAddress: 'Yokohama, Japan',
+          assignedRepName: '',
+          assignedRepEmail: '',
+          verified: true,
+        };
+        setCloudProfile(adminProfile);
+        setNeedsProfileCompletion(false);
+        setLoginModalOpen(false);
+        setActiveView('staff_console');
+        notify('Signed in to Auzio Traders Management Console');
         return;
       }
-      setDemoRoleOverride(null);
-      setCloudProfile(profile);
-      setLoginModalPortal(null);
-      setActiveView('customer_portal');
-      void recordAuditLog({
-        actorRole: 'customer',
-        action: 'login_success',
-        targetType: 'user',
-        targetId: user.uid,
-        summary: `Dealer signed in: ${profile.companyName} (${user.email}).`,
-      });
-      notify(`Signed in to Dealer Portal as ${profile.companyName}`);
-    } else {
-      // Staff / Admin Portal
-      if (profile && profile.role === 'customer') {
-        await signOut(auth);
-        setCrossPortalError(
-          'Access Blocked: Customer / Dealer accounts cannot sign in to the Management / Staff Portal. Please use the Customer / Dealer Login Portal.'
-        );
-        return;
-      }
-      if (!profile && !isBootstrapAdmin) {
-        await signOut(auth);
-        setCrossPortalError(
-          'Access Denied: Your Google account is not registered as authorized AUZIO TRADERS staff. Contact an Administrator or use the Customer / Dealer Portal.'
-        );
-        return;
-      }
-      setDemoRoleOverride(null);
-      setLoginModalPortal(null);
-      setActiveView('staff_console');
-      void recordAuditLog({
-        actorRole: profile?.role || 'admin',
-        action: 'staff_login_success',
-        targetType: 'user',
-        targetId: user.uid,
-        summary: `Staff/Admin signed in: ${user.email}.`,
-      });
-      notify('Signed in to AUZIO TRADERS Staff Operations Console');
+
+      // First-time buyer account: prompt profile completion (strictly customer or dealer)
+      setNeedsProfileCompletion(true);
+    } catch (err) {
+      const message =
+        err instanceof Error && !err.message.includes('popup-closed-by-user')
+          ? err.message
+          : 'Sign-in was cancelled or could not be completed. Please try again.';
+      setAuthError(message);
+    } finally {
+      setIsSigningIn(false);
     }
   };
 
-  const handleDemoRoleSwitch = (nextRole: UserRole, customerUid?: string) => {
-    if (nextRole === 'visitor') {
-      setDemoRoleOverride('visitor');
-      if (activeView === 'customer_portal' || activeView === 'staff_console') {
-        setActiveView('catalog');
-      }
-      notify('Switched to Public Visitor view');
-      return;
-    }
-    setDemoRoleOverride(nextRole);
-    if (nextRole === 'customer') {
-      const targetUid = customerUid || 'cust-kenya-01';
-      setDemoCustomerUid(targetUid);
-      const demo = localUsers.find((u) => u.uid === targetUid);
-      if (demo?.defaultPortId) setSelectedPortId(demo.defaultPortId);
-      setActiveView('customer_portal');
-      notify(`Demo Preview: ${demo?.companyName || 'Customer / Dealer'}`);
-    } else {
-      setActiveView('staff_console');
-      notify(`Demo Preview: ${nextRole.toUpperCase()} Console`);
-    }
+  const handleCompleteBuyerProfile = async (input: {
+    accountType: 'customer' | 'dealer';
+    displayName: string;
+    companyName: string;
+    country: string;
+    defaultPortId: string;
+    phone: string;
+    consigneeAddress: string;
+  }) => {
+    if (!firebaseUser) return;
+    const created = await registerCustomerProfile({
+      uid: firebaseUser.uid,
+      email: firebaseUser.email || '',
+      ...input,
+    });
+    setCloudProfile(created);
+    setNeedsProfileCompletion(false);
+    setLoginModalOpen(false);
+    handlePortChange(created.defaultPortId, true);
+    setActiveView('customer_portal');
+    notify(`Account activated for ${created.companyName || created.displayName}`);
   };
 
   const handleSignOut = async () => {
-    setDemoRoleOverride(null);
     if (firebaseUser) {
       await signOut(auth);
     }
+    setCloudProfile(null);
     if (activeView === 'customer_portal' || activeView === 'staff_console') {
-      setActiveView('catalog');
+      setActiveView('home');
     }
     notify('Signed out safely');
   };
+
+  // Unified Navigation Handler (normalizes 'catalog' into unified Home #vehicle-catalog)
+  const handleNavigateView = useCallback(
+    (view: AppView, opts?: { sourceMode?: 'curated' | 'live_auctions'; anchor?: string }) => {
+      if (opts?.sourceMode) {
+        setCatalogSourceMode(opts.sourceMode);
+      }
+      const targetView: AppView = view === 'catalog' ? 'home' : view;
+      const targetAnchor = opts?.anchor || (view === 'catalog' ? 'vehicle-catalog' : undefined);
+      setActiveView(targetView);
+      if (targetAnchor) {
+        setTimeout(() => {
+          const el = document.getElementById(targetAnchor);
+          el?.scrollIntoView({ behavior: 'smooth' });
+        }, 80);
+      } else {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    },
+    []
+  );
 
   // Compare toggle (max 4)
   const handleToggleCompare = (vehicleId: string) => {
@@ -426,7 +577,7 @@ export default function App() {
     setProformaDraft({
       invoiceNumber: createInvoiceNumber(),
       issueDate: today,
-      validUntilDate: addDaysIso(settings.invoiceValidityDays || 14),
+      validUntilDate: addDaysIso(effectiveSettings.invoiceValidityDays || 14),
       vehicle: params.vehicle,
       cif: params.cif,
       currency,
@@ -443,28 +594,28 @@ export default function App() {
   const handleStartBidRequest = (vehicle: Vehicle) => {
     setSelectedVehicle(null);
     setPrefillSourcingVehicle(vehicle);
-    if (effectiveRole === 'customer') {
+    if (isAuthenticated && isBuyerRole(effectiveRole)) {
       setCustomerTab('sourcing');
       setActiveView('customer_portal');
     } else {
-      setCrossPortalError('');
-      setLoginModalPortal('customer');
-      notify('Sign in or select a demo dealer account to authorize an auction bid.');
+      setAuthError('');
+      setLoginModalOpen(true);
+      notify('Please sign in to submit an authorized auction Max Bid Ceiling.');
     }
   };
 
   const handleOpenSourcingWizard = () => {
-    if (effectiveRole === 'customer') {
+    if (isAuthenticated && isBuyerRole(effectiveRole)) {
       setCustomerTab('sourcing');
       setActiveView('customer_portal');
     } else {
-      setCrossPortalError('');
-      setLoginModalPortal('customer');
+      setAuthError('');
+      setLoginModalOpen(true);
     }
   };
 
   const canImportToFirestore =
-    effectiveRole === 'operations' || effectiveRole === 'admin';
+    isAuthenticated && ['operations', 'management', 'admin'].includes(effectiveRole);
 
   const handleRegisterLiveVehicles = useCallback((items: Vehicle[]) => {
     setLiveLotMap((prev) => {
@@ -487,59 +638,122 @@ export default function App() {
       .filter((v): v is Vehicle => Boolean(v));
   }, [vehicles, liveLotMap, compareIds]);
 
-  const activeUserLabel = useMemo(() => {
-    if (effectiveRole === 'visitor') return '';
-    if (effectiveRole === 'customer') {
-      return activeProfile?.companyName || 'Dealer Portal';
-    }
-    return `${effectiveRole.toUpperCase()} Console`;
-  }, [effectiveRole, activeProfile]);
-
   return (
     <ErrorBoundary>
       <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
         <Navbar
           activeView={activeView}
-          onNavigate={(v) => setActiveView(v)}
           currency={currency}
-          onCurrencyChange={setCurrency}
+          selectedCountryCode={selectedCountryCode}
           selectedPortId={selectedPortId}
-          onPortChange={(pid) => {
-            setSelectedPortId(pid);
-            notify('CIF discharge port updated across portal');
+          liveFx={liveFx}
+          landingContent={landingContent}
+          isAuthenticated={isAuthenticated}
+          userRole={effectiveRole}
+          userProfile={activeProfile}
+          onNavigateView={handleNavigateView}
+          onCurrencyChange={handleCurrencyChange}
+          onCountryChange={handleCountryChange}
+          onPortChange={(pid) => handlePortChange(pid)}
+          onRefreshFx={() => void loadExchangeRates(true)}
+          onOpenLogin={() => {
+            setAuthError('');
+            setLoginModalOpen(true);
           }}
-          compareCount={compareIds.length}
-          onOpenCompare={() => setCompareOpen(true)}
-          onOpenWorkflowStatus={() => setWorkflowModalOpen(true)}
-          effectiveRole={effectiveRole}
-          activeUserLabel={activeUserLabel}
-          isSignedInFirebase={Boolean(firebaseUser && demoRoleOverride === null)}
-          onOpenLoginPortal={(portal) => {
-            setCrossPortalError('');
-            setLoginModalPortal(portal);
-          }}
-          onDemoRoleSwitch={handleDemoRoleSwitch}
           onSignOut={() => void handleSignOut()}
         />
 
+        {/* Floating Compare Tray when buyer selects vehicles to compare */}
+        {compareIds.length > 0 && (
+          <div className="bg-slate-900 text-white border-b border-slate-800 no-print">
+            <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex items-center justify-between gap-3 text-xs">
+              <div className="flex items-center gap-2">
+                <GitCompare className="w-4 h-4 text-amber-400" />
+                <span>
+                  <strong>{compareIds.length}</strong> vehicle{compareIds.length === 1 ? '' : 's'}{' '}
+                  selected for side-by-side comparison
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCompareOpen(true)}
+                  className="px-3 py-1 rounded-md bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold cursor-pointer"
+                >
+                  Compare Now
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCompareIds([])}
+                  className="text-slate-400 hover:text-white cursor-pointer"
+                >
+                  Clear
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
         <main className="flex-1">
-          {activeView === 'catalog' && (
-            <CatalogView
+          {(activeView === 'home' || activeView === 'catalog') && (
+            <LandingView
               vehicles={vehicles}
               currency={currency}
+              liveFx={liveFx}
+              settings={effectiveSettings}
+              selectedCountryCode={selectedCountryCode}
               selectedPortId={selectedPortId}
-              settings={settings}
+              catalogSourceMode={catalogSourceMode}
+              landingContent={landingContent}
+              testimonials={testimonials}
               compareIds={compareIds}
               canImportToFirestore={canImportToFirestore}
-              onRegisterLiveVehicles={handleRegisterLiveVehicles}
-              onImportLiveLot={(lot) => setImportingLiveLot(lot)}
-              onToggleCompare={handleToggleCompare}
+              onCountryChange={handleCountryChange}
+              onPortChange={(pid) => handlePortChange(pid)}
+              onSourceModeChange={setCatalogSourceMode}
+              onNavigateView={handleNavigateView}
               onSelectVehicle={(v) => setSelectedVehicle(v)}
               onOpenProforma={({ vehicle, cif }) => openProformaForVehicle({ vehicle, cif })}
               onStartBidRequest={handleStartBidRequest}
+              onRequestShippingQuote={(vehicle) => {
+                setQuickQuoteConfig({
+                  vehicleId: vehicle.id,
+                  portId: selectedPortId,
+                  shippingMethod: 'roro',
+                  includeInsurance: true,
+                });
+              }}
               onOpenSourcingWizard={handleOpenSourcingWizard}
               onOpenWorkflowStatus={() => setWorkflowModalOpen(true)}
-              onNavigateShipping={() => setActiveView('shipping')}
+              onToggleCompare={handleToggleCompare}
+              onImportLiveLot={(lot) => setImportingLiveLot(lot)}
+              onRegisterLiveVehicles={handleRegisterLiveVehicles}
+              onSubmitGeneralInquiry={async (input) => {
+                const res = await submitBuyerInquiry({
+                  type: 'inquiry',
+                  vehicleId: 'GENERAL',
+                  isVehiclePersisted: false,
+                  vehicleStockCode: 'GEN-QUOTE',
+                  vehicleTitle: input.subject.slice(0, 120),
+                  buyerName: input.buyerName,
+                  buyerEmail: input.buyerEmail,
+                  buyerPhone: input.buyerPhone,
+                  buyerCountry: input.buyerCountry,
+                  destinationPortId: input.destinationPortId,
+                  destinationPortName: input.destinationPortName,
+                  shippingMethod: 'roro',
+                  includeInsurance: true,
+                  fobPriceUsd: 0,
+                  freightUsd: 0,
+                  inspectionUsd: 0,
+                  insuranceUsd: 0,
+                  quotedCifUsd: 0,
+                  currency: 'USD',
+                  message: input.message,
+                });
+                notify(`Inquiry logged — Reference ${res.trackingCode}`);
+                return res.trackingCode;
+              }}
             />
           )}
 
@@ -547,37 +761,36 @@ export default function App() {
             <ShippingRatesView
               currency={currency}
               selectedPortId={selectedPortId}
-              settings={settings}
-              onSelectPort={(pid) => {
-                setSelectedPortId(pid);
-                notify('Active CIF port updated across all vehicle listings');
-              }}
+              settings={effectiveSettings}
+              onSelectPort={(pid) => handlePortChange(pid)}
               onOpenWorkflowStatus={() => setWorkflowModalOpen(true)}
             />
           )}
 
           {activeView === 'how_to_buy' && (
             <HowToBuyView
-              settings={settings}
-              onOpenLoginPortal={(portal) => {
-                setCrossPortalError('');
-                setLoginModalPortal(portal);
+              settings={effectiveSettings}
+              landingContent={landingContent}
+              onOpenLogin={() => {
+                setAuthError('');
+                setLoginModalOpen(true);
               }}
-              onNavigateCatalog={() => setActiveView('catalog')}
+              onOpenSourcingWizard={handleOpenSourcingWizard}
+              onNavigateView={handleNavigateView}
             />
           )}
 
           {activeView === 'track' && (
-            <OrderTrackerView initialCode={trackerInitialCode} settings={settings} />
+            <OrderTrackerView initialCode={trackerInitialCode} settings={effectiveSettings} />
           )}
 
           {activeView === 'customer_portal' && (
             <CustomerPortalView
               activeTab={customerTab}
               onTabChange={setCustomerTab}
-              profile={effectiveRole === 'customer' ? activeProfile : null}
+              profile={isBuyerRole(effectiveRole) ? activeProfile : null}
               currency={currency}
-              settings={settings}
+              settings={effectiveSettings}
               vehicles={vehicles}
               sourcingRequests={sourcingRequests}
               quotations={quotations}
@@ -588,8 +801,8 @@ export default function App() {
               isLiveFirestoreMode={isLiveFirestoreMode}
               onClearPrefillVehicle={() => setPrefillSourcingVehicle(null)}
               onOpenCustomerLogin={() => {
-                setCrossPortalError('');
-                setLoginModalPortal('customer');
+                setAuthError('');
+                setLoginModalOpen(true);
               }}
               onOpenProforma={({ vehicle, cif, trackingCode }) =>
                 openProformaForVehicle({ vehicle, cif, trackingCode })
@@ -604,8 +817,8 @@ export default function App() {
                     prev.map((u) => (u.uid === activeProfile.uid ? { ...u, ...updates } : u))
                   );
                 }
-                setSelectedPortId(updates.defaultPortId);
-                notify('Dealership profile & default CIF port saved');
+                handlePortChange(updates.defaultPortId, true);
+                notify('Buyer profile & preferred shipping port saved');
               }}
               onCreateSourcingRequest={async (input) => {
                 if (!activeProfile) throw new Error('Not signed in');
@@ -659,22 +872,6 @@ export default function App() {
                         : q
                     )
                   );
-                  setLocalAuditLogs((prev) => [
-                    {
-                      id: `aud-${Date.now()}`,
-                      actorUid: activeProfile.uid,
-                      actorEmail: activeProfile.email,
-                      actorRole: 'customer',
-                      action: decision === 'approved' ? 'quote_approved' : 'quote_declined',
-                      targetType: 'quotation',
-                      targetId: quotation.id,
-                      summary:
-                        decision === 'approved'
-                          ? `Approved ${quotation.quoteNumber} and authorized Max Bid Ceiling $${quotation.authorizedMaxBidUsd.toLocaleString()} USD.`
-                          : `Declined ${quotation.quoteNumber}: ${declineReason || 'No reason'}.`,
-                    },
-                    ...prev,
-                  ]);
                 }
                 notify(
                   decision === 'approved'
@@ -690,7 +887,7 @@ export default function App() {
                     customerId: activeProfile.uid,
                     senderUid: activeProfile.uid,
                     senderName: activeProfile.displayName,
-                    senderRole: 'customer',
+                    senderRole: activeProfile.role,
                     body,
                     isInternalStaffOnly: false,
                   });
@@ -703,7 +900,7 @@ export default function App() {
                       customerId: activeProfile.uid,
                       senderUid: activeProfile.uid,
                       senderName: activeProfile.displayName,
-                      senderRole: 'customer',
+                      senderRole: activeProfile.role,
                       body,
                       isInternalStaffOnly: false,
                     },
@@ -719,7 +916,8 @@ export default function App() {
               role={effectiveRole}
               staffProfile={activeProfile}
               currency={currency}
-              settings={settings}
+              settings={effectiveSettings}
+              liveFxRates={liveFx.rates}
               isLiveFirestoreMode={isLiveFirestoreMode}
               vehicles={vehicles}
               users={users}
@@ -730,10 +928,25 @@ export default function App() {
               documents={documents}
               auditLogs={auditLogs}
               inquiries={cloudInquiries}
+              landingContent={landingContent}
+              testimonials={testimonials}
               onNotify={notify}
               onOpenStaffLogin={() => {
-                setCrossPortalError('');
-                setLoginModalPortal('staff');
+                setAuthError('');
+                setLoginModalOpen(true);
+              }}
+              onSaveLandingContent={async (next) => {
+                await saveLandingContent(next);
+                setLandingContent(next);
+                notify('Landing page CMS & SEO settings published live');
+              }}
+              onSaveTestimonial={async (input, existingId) => {
+                await saveTestimonial(input, existingId);
+                notify(existingId ? 'Testimonial updated' : 'Verified customer review saved');
+              }}
+              onDeleteTestimonial={async (id) => {
+                await deleteTestimonial(id);
+                notify('Customer review deleted');
               }}
               onAttachSourcingOption={async (req, opt: SourcingOption) => {
                 const nextOptions = [...(req.options || []), opt];
@@ -783,140 +996,130 @@ export default function App() {
                       approvedAt: '',
                       approvedByUid: '',
                       declineReason: '',
-                      validUntil: addDaysIso(14),
+                      validUntil: addDaysIso(7),
                     },
                     ...prev,
                   ]);
                   notify(`Issued Quotation ${qNum} to ${input.customerCompany}`);
                 }
               }}
-              onConvertQuoteToOrder={async (q) => {
+              onConvertQuoteToOrder={async (quotation) => {
                 if (isLiveFirestoreMode) {
-                  const ordNum = await convertQuotationToOrder(q);
-                  notify(`Opened Export Order ${ordNum}`);
+                  const orderNumber = await convertQuotationToOrder(quotation);
+                  notify(`Converted ${quotation.quoteNumber} into Export Order ${orderNumber}`);
                 } else {
-                  const ordNum = `ORD-AUZ-2026-${Math.floor(710 + Math.random() * 289)}`;
-                  const newOrder: ExportOrder = {
-                    id: `ord-${Date.now()}`,
-                    orderNumber: ordNum,
-                    trackingCode: `AUZ-2026-${Math.random().toString(36).slice(2, 8).toUpperCase()}`,
-                    quotationId: q.id,
-                    customerId: q.customerId,
-                    customerName: q.customerName,
-                    customerCompany: q.customerCompany,
-                    vehicleId: q.vehicleId || 'GENERAL',
-                    vehicleStockCode: q.stockCode,
-                    vehicleTitle: q.vehicleTitle,
-                    listingType: 'auction_listing',
-                    destinationCountry: q.destinationPortName.split(',').pop()?.trim() || 'Kenya',
-                    destinationPortId: q.destinationPortId,
-                    destinationPortName: q.destinationPortName,
-                    shippingMethod: 'roro',
-                    fobUsd: q.fobVehicleUsd,
-                    freightUsd: q.seaFreightUsd,
-                    inspectionUsd: q.jevicInspectionUsd,
-                    insuranceUsd: q.marineInsuranceUsd,
-                    totalCifUsd: q.totalCifUsd,
-                    currency: q.currency,
-                    authorizedMaxBidUsd: q.authorizedMaxBidUsd,
-                    placedBidUsd: 0,
-                    milestone: 'customer_approved',
-                    vesselName: '',
-                    voyageNumber: '',
-                    blNumber: '',
-                    etdDate: '',
-                    etaDate: '',
-                    scheduleIsEstimate: true,
-                  };
-                  setLocalOrders((prev) => [newOrder, ...prev]);
-                  notify(`Opened Export Order ${ordNum}`);
+                  const orderNumber = `ORD-AUZ-2026-${Math.floor(300 + Math.random() * 699)}`;
+                  setLocalOrders((prev) => [
+                    {
+                      id: `ord-${Date.now()}`,
+                      orderNumber,
+                      trackingCode: `AUZ-2026-${Math.floor(100000 + Math.random() * 899999)}`,
+                      quotationId: quotation.id,
+                      customerId: quotation.customerId,
+                      customerName: quotation.customerName,
+                      customerCompany: quotation.customerCompany,
+                      vehicleId: quotation.vehicleId,
+                      vehicleStockCode: quotation.stockCode,
+                      vehicleTitle: quotation.vehicleTitle,
+                      listingType: 'auction_listing',
+                      destinationCountry: '',
+                      destinationPortId: quotation.destinationPortId,
+                      destinationPortName: quotation.destinationPortName,
+                      shippingMethod: 'roro',
+                      fobUsd: quotation.fobVehicleUsd,
+                      freightUsd: quotation.seaFreightUsd,
+                      inspectionUsd: quotation.jevicInspectionUsd,
+                      insuranceUsd: quotation.marineInsuranceUsd,
+                      totalCifUsd: quotation.totalCifUsd,
+                      currency: quotation.currency,
+                      authorizedMaxBidUsd: quotation.authorizedMaxBidUsd,
+                      placedBidUsd: 0,
+                      milestone: 'customer_approved',
+                      vesselName: '',
+                      voyageNumber: '',
+                      blNumber: '',
+                      etdDate: '',
+                      etaDate: '',
+                      scheduleIsEstimate: true,
+                    },
+                    ...prev,
+                  ]);
+                  notify(`Export Order ${orderNumber} created`);
                 }
               }}
-              onPlaceAuctionBid={async (ord, bidAmountUsd) => {
+              onPlaceAuctionBid={async (order, bidAmountUsd) => {
+                if (order.authorizedMaxBidUsd > 0 && bidAmountUsd > order.authorizedMaxBidUsd) {
+                  return {
+                    ok: false,
+                    error: `BLOCKED: Bid $${bidAmountUsd.toLocaleString()} exceeds customer-authorized Max Bid Ceiling ($${order.authorizedMaxBidUsd.toLocaleString()} USD).`,
+                  };
+                }
                 if (isLiveFirestoreMode) {
                   return placeAuctionBidWithGuard({
-                    order: ord,
+                    order,
                     bidAmountUsd,
                     actorRole: effectiveRole,
                   });
                 }
-                const bid = Math.round(bidAmountUsd);
-                if (ord.authorizedMaxBidUsd > 0 && bid > ord.authorizedMaxBidUsd) {
-                  setLocalAuditLogs((prev) => [
-                    {
-                      id: `aud-${Date.now()}`,
-                      actorUid: activeProfile?.uid || 'staff-sales-01',
-                      actorEmail: activeProfile?.email || 'k.takahashi@auziotraders.com',
-                      actorRole: effectiveRole,
-                      action: 'bid_blocked',
-                      targetType: 'order',
-                      targetId: ord.id,
-                      summary: `BLOCKED bid of $${bid.toLocaleString()} USD exceeding authorized ceiling $${ord.authorizedMaxBidUsd.toLocaleString()} USD on ${ord.orderNumber}.`,
-                    },
-                    ...prev,
-                  ]);
-                  return {
-                    ok: false,
-                    error: `Bid Ceiling Guard: $${bid.toLocaleString()} USD exceeds customer's authorized ceiling of $${ord.authorizedMaxBidUsd.toLocaleString()} USD. Bid strictly blocked and logged.`,
-                  };
-                }
                 setLocalOrders((prev) =>
                   prev.map((o) =>
-                    o.id === ord.id ? { ...o, placedBidUsd: bid, milestone: 'bid_placed' } : o
+                    o.id === order.id
+                      ? { ...o, placedBidUsd: bidAmountUsd, milestone: 'bid_placed' }
+                      : o
                   )
                 );
-                setLocalAuditLogs((prev) => [
-                  {
-                    id: `aud-${Date.now()}`,
-                    actorUid: activeProfile?.uid || 'staff-sales-01',
-                    actorEmail: activeProfile?.email || 'k.takahashi@auziotraders.com',
-                    actorRole: effectiveRole,
-                    action: 'bid_placed',
-                    targetType: 'order',
-                    targetId: ord.id,
-                    summary: `Placed auction bid of $${bid.toLocaleString()} USD (within $${ord.authorizedMaxBidUsd.toLocaleString()} ceiling) on ${ord.orderNumber}.`,
-                  },
-                  ...prev,
-                ]);
                 return { ok: true };
               }}
-              onUpdateOrderLogistics={async (params) => {
+              onUpdateOrderLogistics={async ({
+                order,
+                milestone,
+                vesselName,
+                voyageNumber,
+                blNumber,
+                etdDate,
+                etaDate,
+                scheduleIsEstimate,
+              }) => {
                 if (isLiveFirestoreMode) {
-                  await updateOrderLogistics({ ...params, actorRole: effectiveRole });
+                  await updateOrderLogistics({
+                    order,
+                    milestone,
+                    vesselName,
+                    voyageNumber,
+                    blNumber,
+                    etdDate,
+                    etaDate,
+                    scheduleIsEstimate,
+                    actorRole: effectiveRole,
+                  });
                 } else {
                   setLocalOrders((prev) =>
                     prev.map((o) =>
-                      o.id === params.order.id
+                      o.id === order.id
                         ? {
                             ...o,
-                            milestone: params.milestone,
-                            vesselName: params.vesselName,
-                            voyageNumber: params.voyageNumber,
-                            blNumber: params.blNumber,
-                            etdDate: params.etdDate,
-                            etaDate: params.etaDate,
-                            scheduleIsEstimate: params.scheduleIsEstimate,
+                            milestone,
+                            vesselName,
+                            voyageNumber,
+                            blNumber,
+                            etdDate,
+                            etaDate,
+                            scheduleIsEstimate,
                           }
                         : o
                     )
                   );
                 }
-                notify(`Updated ${params.order.orderNumber} logistics & milestone`);
+                notify(`Updated vessel & milestone for ${order.orderNumber}`);
               }}
               onPostOrderMessage={async ({ order, body, isInternalStaffOnly }) => {
-                const senderRole =
-                  effectiveRole === 'sales' ||
-                  effectiveRole === 'operations' ||
-                  effectiveRole === 'admin'
-                    ? effectiveRole
-                    : 'operations';
-                if (isLiveFirestoreMode) {
+                if (isLiveFirestoreMode && activeProfile) {
                   await postOrderMessage({
                     orderId: order.id,
                     customerId: order.customerId,
-                    senderUid: activeProfile?.uid || 'staff-ops-01',
-                    senderName: activeProfile?.displayName || 'AUZIO Operations',
-                    senderRole,
+                    senderUid: activeProfile.uid,
+                    senderName: activeProfile.displayName,
+                    senderRole: activeProfile.role,
                     body,
                     isInternalStaffOnly,
                   });
@@ -928,8 +1131,8 @@ export default function App() {
                       orderId: order.id,
                       customerId: order.customerId,
                       senderUid: activeProfile?.uid || 'staff-ops-01',
-                      senderName: activeProfile?.displayName || 'AUZIO Operations',
-                      senderRole,
+                      senderName: activeProfile?.displayName || 'Operations Team',
+                      senderRole: activeProfile?.role || 'operations',
                       body,
                       isInternalStaffOnly,
                     },
@@ -937,39 +1140,44 @@ export default function App() {
                 }
                 notify(
                   isInternalStaffOnly
-                    ? 'Confidential internal staff note saved (hidden from customer)'
-                    : 'Customer-visible update posted'
+                    ? 'Internal staff note posted (hidden from customer)'
+                    : 'Customer-visible update sent'
                 );
               }}
-              onArchiveVehicle={async (v) => {
-                if (isLiveFirestoreMode) {
-                  await updateVehicleStatus(v, 'archived');
+              onArchiveVehicle={async (vehicle) => {
+                const nextStatus = vehicle.status === 'archived' ? 'available' : 'archived';
+                if (isLiveFirestoreMode && persistedVehicleIds.has(vehicle.id)) {
+                  await updateVehicleStatus(vehicle, nextStatus);
                 }
-                notify(`Archived ${v.stockCode}`);
+                notify(
+                  nextStatus === 'archived'
+                    ? `Archived ${vehicle.stockCode}`
+                    : `Restored ${vehicle.stockCode} to catalog`
+                );
               }}
-              onDeleteVehicle={async (id) => {
-                if (isLiveFirestoreMode) {
-                  await deleteVehicle(id);
+              onDeleteVehicle={async (vehicleId) => {
+                if (isLiveFirestoreMode && persistedVehicleIds.has(vehicleId)) {
+                  await deleteVehicle(vehicleId);
                 }
-                notify('Vehicle deleted from inventory');
+                notify('Vehicle record deleted');
               }}
               onCreateDocument={async (input) => {
                 if (isLiveFirestoreMode) {
                   await createExportDocument({
                     ...input,
-                    uploadedByName: activeProfile?.displayName || 'Mayumi Sato',
+                    uploadedByName: activeProfile?.displayName || 'Operations Desk',
                   });
                 } else {
                   setLocalDocs((prev) => [
                     {
                       id: `doc-${Date.now()}`,
                       ...input,
-                      uploadedByName: activeProfile?.displayName || 'Mayumi Sato',
+                      uploadedByName: activeProfile?.displayName || 'Operations Desk',
                     },
                     ...prev,
                   ]);
                 }
-                notify(`Published document: ${input.title}`);
+                notify(`Uploaded ${input.title}`);
               }}
               onToggleDocVisibility={async (docRecord, nextVisible) => {
                 if (isLiveFirestoreMode) {
@@ -983,8 +1191,8 @@ export default function App() {
                 }
                 notify(
                   nextVisible
-                    ? `"${docRecord.title}" is now visible in Customer Vault`
-                    : `"${docRecord.title}" restricted to Staff-Only`
+                    ? `Released "${docRecord.title}" to Customer Vault`
+                    : `Restricted "${docRecord.title}" to Staff-Only`
                 );
               }}
               onDeleteDocument={async (docId) => {
@@ -1003,7 +1211,7 @@ export default function App() {
                     prev.map((u) => (u.uid === uid ? { ...u, ...updates } : u))
                   );
                 }
-                notify('User role & verification updated');
+                notify(`Updated user role to ${updates.role.toUpperCase()}`);
               }}
               onSaveSettings={async (next) => {
                 if (isLiveFirestoreMode) {
@@ -1011,57 +1219,36 @@ export default function App() {
                 } else {
                   setSettings(next);
                 }
-                notify('SMBC banking & FX rates saved');
+                notify('Company banking & FX settings saved');
               }}
               onSeedDatabase={async () => {
-                if (isLiveFirestoreMode) {
-                  await seedFullTradeDatabase();
-                  notify('Full AUZIO TRADERS sample database seeded to Firestore');
-                } else {
-                  setLocalUsers(DEMO_USERS);
-                  setLocalRequests(SEED_SOURCING_REQUESTS);
-                  setLocalQuotations(SEED_QUOTATIONS);
-                  setLocalOrders(SEED_ORDERS);
-                  setLocalMessages(SEED_MESSAGES);
-                  setLocalDocs(SEED_DOCUMENTS);
-                  setLocalAuditLogs(SEED_AUDIT_LOGS);
-                  notify('Demo datasets reset (sign in as Admin to seed live Firestore)');
-                }
+                await seedFullTradeDatabase();
+                notify('Full trade database seeded in Firestore');
               }}
               onClearSampleData={async () => {
-                if (isLiveFirestoreMode) {
-                  await clearSampleTradeData();
-                  notify('Cleared sample trade collections from Firestore');
-                } else {
-                  setLocalRequests([]);
-                  setLocalQuotations([]);
-                  setLocalOrders([]);
-                  setLocalMessages([]);
-                  setLocalDocs([]);
-                  notify('Cleared demo preview collections');
-                }
+                await clearSampleTradeData();
+                setLocalAuditLogs([]);
+                notify('Sample trade data cleared from Firestore');
               }}
             />
           )}
         </main>
 
         <Footer
-          settings={settings}
-          onNavigate={setActiveView}
-          onOpenLoginPortal={(portal) => {
-            setCrossPortalError('');
-            setLoginModalPortal(portal);
-          }}
-          onOpenWorkflowStatus={() => setWorkflowModalOpen(true)}
+          landingContent={landingContent}
+          onNavigateView={handleNavigateView}
+          onOpenPolicy={(policy) => setActivePolicy(policy)}
         />
 
-        {/* Vehicle Specifications & CIF Detail Modal */}
+        <FloatingUtilities whatsappPhone={landingContent.contactWhatsapp} />
+
+        {/* Vehicle Detail Modal */}
         {selectedVehicle && (
           <VehicleDetailModal
             vehicle={selectedVehicle}
             currency={currency}
             defaultPortId={selectedPortId}
-            settings={settings}
+            settings={effectiveSettings}
             isCompared={compareIds.includes(selectedVehicle.id)}
             canImportToFirestore={canImportToFirestore}
             onImportLiveLot={(lot) => {
@@ -1097,13 +1284,13 @@ export default function App() {
           />
         )}
 
-        {/* Side-by-Side Comparison Matrix Modal (up to 4 units) */}
+        {/* Side-by-Side Comparison Matrix Modal */}
         {compareOpen && compareVehiclesList.length > 0 && (
           <ComparisonModal
             vehicles={compareVehiclesList}
             currency={currency}
             portId={selectedPortId}
-            settings={settings}
+            settings={effectiveSettings}
             onRemove={(id) => {
               setCompareIds((prev) => {
                 const next = prev.filter((x) => x !== id);
@@ -1125,12 +1312,12 @@ export default function App() {
         {proformaDraft && (
           <ProformaInvoiceModal
             draft={proformaDraft}
-            settings={settings}
+            settings={effectiveSettings}
             onClose={() => setProformaDraft(null)}
           />
         )}
 
-        {/* Quick Visitor Inquiry / 48h Hold Modal */}
+        {/* Quick Inquiry / Shipping Quote Modal */}
         {quickQuoteConfig && (
           <QuickQuoteModal
             vehicles={[
@@ -1141,7 +1328,7 @@ export default function App() {
             ]}
             persistedVehicleIds={persistedVehicleIds}
             currency={currency}
-            settings={settings}
+            settings={effectiveSettings}
             defaultVehicleId={quickQuoteConfig.vehicleId}
             initialPortId={quickQuoteConfig.portId || selectedPortId}
             initialShippingMethod={quickQuoteConfig.shippingMethod}
@@ -1172,38 +1359,46 @@ export default function App() {
           />
         )}
 
-        {/* Platform & Workflow Status Honesty Disclosure Modal */}
+        {/* Workflow Disclosure Modal (accessible internally only, never from public header) */}
         {workflowModalOpen && (
-          <WorkflowStatusModal settings={settings} onClose={() => setWorkflowModalOpen(false)} />
+          <WorkflowStatusModal
+            settings={effectiveSettings}
+            onClose={() => setWorkflowModalOpen(false)}
+          />
         )}
 
-        {/* Dual Login Modal (Customer/Dealer vs Management/Staff/Admin) */}
-        {loginModalPortal && (
-          <DualLoginModal
-            portalType={loginModalPortal}
-            firebaseUser={firebaseUser}
-            needsCustomerRegistration={needsCustomerRegistration}
-            crossPortalError={crossPortalError}
-            onGoogleSignIn={handleGoogleSignIn}
-            onRegistrationComplete={(profile) => {
-              setDemoRoleOverride(null);
-              setCloudProfile(profile);
-              setNeedsCustomerRegistration(false);
-              setSelectedPortId(profile.defaultPortId);
-              setActiveView('customer_portal');
-              notify(`Dealer account activated for ${profile.companyName}`);
-            }}
-            onSelectDemoRole={handleDemoRoleSwitch}
+        {/* Legal Policies Modal */}
+        {activePolicy && (
+          <LegalPolicyModal
+            policy={activePolicy}
+            contactEmail={landingContent.contactEmail}
+            contactAddress={landingContent.contactAddress}
+            onClose={() => setActivePolicy(null)}
+          />
+        )}
+
+        {/* Single Universal Login Modal */}
+        {loginModalOpen && (
+          <UniversalLoginModal
+            isAuthenticated={Boolean(firebaseUser)}
+            needsProfileCompletion={needsProfileCompletion}
+            currentEmail={firebaseUser?.email || ''}
+            currentDisplayName={firebaseUser?.displayName || ''}
+            userProfile={activeProfile}
+            authError={authError}
+            isSigningIn={isSigningIn}
+            onGoogleSignIn={handleUniversalGoogleSignIn}
+            onCompleteBuyerProfile={handleCompleteBuyerProfile}
             onClose={() => {
-              setLoginModalPortal(null);
-              setCrossPortalError('');
+              setLoginModalOpen(false);
+              setAuthError('');
             }}
           />
         )}
 
         {/* Non-blocking Toast */}
         {toast && (
-          <div className="no-print fixed bottom-5 right-5 z-50 max-w-md bg-slate-950 text-white border border-slate-700 rounded-xl shadow-xl px-4 py-3 flex items-center gap-3 text-xs">
+          <div className="no-print fixed bottom-20 right-5 z-50 max-w-md bg-slate-950 text-white border border-slate-700 rounded-xl shadow-xl px-4 py-3 flex items-center gap-3 text-xs">
             <CheckCircle2 className="w-4 h-4 text-amber-400 shrink-0" />
             <span className="leading-snug">{toast}</span>
             <button
