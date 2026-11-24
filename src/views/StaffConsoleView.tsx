@@ -1,40 +1,69 @@
 import {
   AlertTriangle,
   Archive,
+  ArrowLeft,
+  Bell,
+  Bot,
+  Briefcase,
+  Car,
   CheckCircle2,
-  ClipboardList,
-  Database,
+  ChevronLeft,
+  ChevronRight,
+  CreditCard,
   Edit3,
+  ExternalLink,
   Eye,
   EyeOff,
-  FilePlus2,
+  FileBarChart2,
   FileText,
   Gavel,
+  Globe,
   LayoutDashboard,
   Lock,
+  LogOut,
+  Menu,
   MessageSquare,
+  Moon,
   Package,
   Plus,
+  Search,
   Send,
   Settings,
-  ShieldAlert,
+  Shield,
   ShieldCheck,
+  Ship,
+  Sun,
   Trash2,
+  TrendingUp,
   Users,
+  X,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import {
-  ALL_CURRENCIES,
-  formatMoney,
-  getPortById,
-  GLOBAL_PORTS,
-  TRADE_MILESTONE_META,
-  TRADE_MILESTONE_ORDER,
-} from '../data/ports';
+import { useEffect, useMemo, useState } from 'react';
 import { AdminCmsPanel } from '../components/AdminCmsPanel';
 import { AdminVehicleModal } from '../components/AdminVehicleModal';
 import { StaffAuctionImportPanel } from '../components/StaffAuctionImportPanel';
+import { AccountsFinancePanel } from '../components/admin/AccountsFinancePanel';
+import { AdminSettingsPanel } from '../components/admin/AdminSettingsPanel';
+import { AiAutomationPanel } from '../components/admin/AiAutomationPanel';
+import { CrmSalesPanel } from '../components/admin/CrmSalesPanel';
+import { ExecutiveDashboardPanel } from '../components/admin/ExecutiveDashboardPanel';
+import { HrManagementPanel } from '../components/admin/HrManagementPanel';
+import { ReportsTasksHubPanel } from '../components/admin/ReportsTasksHubPanel';
+import { UsersPermissionsPanel } from '../components/admin/UsersPermissionsPanel';
+import { OFFICIAL_LOGO_URL } from '../data/landingDefaults';
+import {
+  hasModulePermission,
+  isStaffRole,
+  ROLE_METADATA,
+} from '../data/permissions';
+import {
+  formatMoney,
+  getPortById,
+  TRADE_MILESTONE_META,
+  TRADE_MILESTONE_ORDER,
+} from '../data/ports';
 import type {
+  AdminModuleKey,
   AuditLogEntry,
   CompanySettings,
   CurrencyCode,
@@ -42,35 +71,55 @@ import type {
   ExportDocType,
   ExportDocument,
   ExportOrder,
+  FinanceRecord,
+  FinanceRecordStatus,
+  HrEmployee,
+  HrLeaveRequest,
   Inquiry,
   LandingPageContent,
+  LiveExchangeRateState,
   OrderMessage,
+  OrderMilestone,
   PersistedUserRole,
   Quotation,
+  RolePermissionsMap,
+  SalesTarget,
   SourcingOption,
   SourcingRequest,
+  TeamChannelId,
+  TeamChannelMessage,
+  TeamTask,
   TradeOrderMilestone,
   UserProfile,
   UserRole,
   Vehicle,
 } from '../types/portal';
 
-type StaffTab =
-  | 'overview'
-  | 'sourcing'
-  | 'quotations'
-  | 'orders'
+type ConsoleSection =
+  | 'dashboard'
+  | 'crm'
+  | 'sales'
   | 'inventory'
+  | 'auctions'
+  | 'orders'
+  | 'logistics'
+  | 'accounts'
+  | 'hr'
   | 'documents'
+  | 'reports'
   | 'cms'
-  | 'audit'
+  | 'ai'
+  | 'users'
   | 'settings';
+
+const THEME_STORAGE_KEY = 'auzio_admin_theme';
 
 interface StaffConsoleViewProps {
   role: UserRole;
   staffProfile: UserProfile | null;
   currency: CurrencyCode;
   settings: CompanySettings;
+  liveFx: LiveExchangeRateState;
   isLiveFirestoreMode: boolean;
   vehicles: Vehicle[];
   users: UserProfile[];
@@ -81,6 +130,19 @@ interface StaffConsoleViewProps {
   documents: ExportDocument[];
   auditLogs: AuditLogEntry[];
   inquiries: Inquiry[];
+  financeRecords: FinanceRecord[];
+  hrEmployees: HrEmployee[];
+  hrLeaveRequests: HrLeaveRequest[];
+  teamTasks: TeamTask[];
+  teamMessages: TeamChannelMessage[];
+  salesTargets: SalesTarget[];
+  landingContent: LandingPageContent;
+  testimonials: CustomerTestimonial[];
+  onRefreshFx: () => void;
+  onUpdateInquiry: (
+    inquiryId: string,
+    updates: { status: OrderMilestone; adminNotes: string }
+  ) => Promise<void>;
   onAttachSourcingOption: (request: SourcingRequest, option: SourcingOption) => Promise<void>;
   onCreateQuotation: (input: {
     sourcingRequestId: string;
@@ -144,11 +206,36 @@ interface StaffConsoleViewProps {
       verified: boolean;
       assignedRepName: string;
       assignedRepEmail: string;
+      department?: string;
+      permissions?: RolePermissionsMap;
     }
   ) => Promise<void>;
-  landingContent: LandingPageContent;
-  testimonials: CustomerTestimonial[];
-  liveFxRates?: Record<string, number>;
+  onCreateFinanceRecord: (
+    input: Omit<FinanceRecord, 'id' | 'createdAt' | 'updatedAt'>
+  ) => Promise<void>;
+  onUpdateFinanceStatus: (
+    id: string,
+    updates: { status: FinanceRecordStatus; reconciled: boolean }
+  ) => Promise<void>;
+  onDeleteFinanceRecord: (id: string) => Promise<void>;
+  onSaveHrEmployee: (
+    input: Omit<HrEmployee, 'id' | 'createdAt' | 'updatedAt'>,
+    existingId?: string
+  ) => Promise<void>;
+  onDeleteHrEmployee: (id: string) => Promise<void>;
+  onCreateHrLeave: (
+    input: Omit<HrLeaveRequest, 'id' | 'status' | 'reviewedByName' | 'createdAt' | 'updatedAt'>
+  ) => Promise<void>;
+  onReviewHrLeave: (id: string, status: 'approved' | 'rejected') => Promise<void>;
+  onCreateTeamTask: (input: Omit<TeamTask, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  onUpdateTeamTaskStatus: (id: string, status: TeamTask['status']) => Promise<void>;
+  onDeleteTeamTask: (id: string) => Promise<void>;
+  onPostTeamMessage: (channel: TeamChannelId, body: string) => Promise<void>;
+  onSaveSalesTarget: (
+    input: Omit<SalesTarget, 'id' | 'createdAt' | 'updatedAt'>,
+    existingId?: string
+  ) => Promise<void>;
+  onDeleteSalesTarget: (id: string) => Promise<void>;
   onSaveLandingContent: (next: LandingPageContent) => Promise<void>;
   onSaveTestimonial: (
     input: Omit<CustomerTestimonial, 'id' | 'createdAt' | 'updatedAt'>,
@@ -156,60 +243,138 @@ interface StaffConsoleViewProps {
   ) => Promise<void>;
   onDeleteTestimonial: (id: string) => Promise<void>;
   onSaveSettings: (next: CompanySettings) => Promise<void>;
+  onSaveBankingDetails: (next: CompanySettings, verificationReason: string) => Promise<void>;
   onSeedDatabase: () => Promise<void>;
   onClearSampleData: () => Promise<void>;
   onNotify: (msg: string) => void;
   onOpenStaffLogin: () => void;
+  onExitConsole: () => void;
+  onSignOut: () => void;
 }
 
-export function StaffConsoleView({
-  role,
-  staffProfile,
-  currency,
-  settings,
-  isLiveFirestoreMode,
-  vehicles,
-  users,
-  sourcingRequests,
-  quotations,
-  orders,
-  messages,
-  documents,
-  auditLogs,
-  inquiries,
-  landingContent,
-  testimonials,
-  liveFxRates,
-  onAttachSourcingOption,
-  onCreateQuotation,
-  onConvertQuoteToOrder,
-  onPlaceAuctionBid,
-  onUpdateOrderLogistics,
-  onPostOrderMessage,
-  onArchiveVehicle,
-  onDeleteVehicle,
-  onCreateDocument,
-  onToggleDocVisibility,
-  onDeleteDocument,
-  onUpdateUserRole,
-  onSaveLandingContent,
-  onSaveTestimonial,
-  onDeleteTestimonial,
-  onSaveSettings,
-  onSeedDatabase,
-  onClearSampleData,
-  onNotify,
-  onOpenStaffLogin,
-}: StaffConsoleViewProps) {
-  const isStaff = ['sales', 'accounts', 'operations', 'management', 'admin'].includes(role);
-  const isAdmin = role === 'admin' || role === 'management';
-  const canQuote = ['sales', 'accounts', 'management', 'admin'].includes(role);
-  const canInventory = ['operations', 'management', 'admin'].includes(role);
+export function StaffConsoleView(props: StaffConsoleViewProps) {
+  const {
+    role,
+    staffProfile,
+    currency,
+    settings,
+    liveFx,
+    vehicles,
+    users,
+    sourcingRequests,
+    quotations,
+    orders,
+    messages,
+    documents,
+    auditLogs,
+    inquiries,
+    financeRecords,
+    hrEmployees,
+    hrLeaveRequests,
+    teamTasks,
+    teamMessages,
+    salesTargets,
+    landingContent,
+    testimonials,
+    onRefreshFx,
+    onUpdateInquiry,
+    onAttachSourcingOption,
+    onCreateQuotation,
+    onConvertQuoteToOrder,
+    onPlaceAuctionBid,
+    onUpdateOrderLogistics,
+    onPostOrderMessage,
+    onArchiveVehicle,
+    onDeleteVehicle,
+    onCreateDocument,
+    onToggleDocVisibility,
+    onDeleteDocument,
+    onUpdateUserRole,
+    onCreateFinanceRecord,
+    onUpdateFinanceStatus,
+    onDeleteFinanceRecord,
+    onSaveHrEmployee,
+    onDeleteHrEmployee,
+    onCreateHrLeave,
+    onReviewHrLeave,
+    onCreateTeamTask,
+    onUpdateTeamTaskStatus,
+    onDeleteTeamTask,
+    onPostTeamMessage,
+    onSaveSalesTarget,
+    onDeleteSalesTarget,
+    onSaveLandingContent,
+    onSaveTestimonial,
+    onDeleteTestimonial,
+    onSaveSettings,
+    onSaveBankingDetails,
+    onSeedDatabase,
+    onClearSampleData,
+    onNotify,
+    onOpenStaffLogin,
+    onExitConsole,
+    onSignOut,
+  } = props;
 
-  const [activeTab, setActiveTab] = useState<StaffTab>('overview');
-  const fmt = (usd: number) => formatMoney(usd, currency, liveFxRates || settings.exchangeRates);
+  const isAuthorizedStaff = isStaffRole(role);
+  const can = (mod: AdminModuleKey, action: 'view' | 'create' | 'edit' | 'delete' | 'approve' | 'export') =>
+    hasModulePermission(role, staffProfile, mod, action);
 
-  // Sourcing option composer state
+  const fxRates = liveFx.ok ? liveFx.rates : settings.exchangeRates;
+  const fmt = (usd: number) => formatMoney(usd, currency, fxRates);
+
+  // Shell State
+  const [activeSection, setActiveSection] = useState<ConsoleSection>('dashboard');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [darkMode, setDarkMode] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(THEME_STORAGE_KEY) === 'dark';
+    } catch {
+      return false;
+    }
+  });
+  const [universalSearch, setUniversalSearch] = useState('');
+  const [searchFocused, setSearchFocused] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+
+  // AI prefill state (when triggered from Dashboard or CRM)
+  const [aiPreset, setAiPreset] = useState<{
+    tool: 'daily_report' | 'sales_followup' | 'document_extract' | 'business_chat';
+    prompt: string;
+  }>({
+    tool: 'daily_report',
+    prompt: '',
+  });
+
+  // Sync Tailwind v4 dark class on <html>
+  useEffect(() => {
+    const root = document.documentElement;
+    if (darkMode) {
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+    }
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, darkMode ? 'dark' : 'light');
+    } catch {
+      // ignore
+    }
+    return () => {
+      root.classList.remove('dark');
+    };
+  }, [darkMode]);
+
+  // Inventory State
+  const [invSearch, setInvSearch] = useState('');
+  const [invStatusFilter, setInvStatusFilter] = useState<'ALL' | 'available' | 'reserved' | 'sold' | 'archived'>('ALL');
+  const [vehicleModalOpen, setVehicleModalOpen] = useState(false);
+  const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
+  const [isImportMode, setIsImportMode] = useState(false);
+  const [confirmDeleteVehId, setConfirmDeleteVehId] = useState<string | null>(null);
+
+  // Auctions & Sourcing State
+  const [auctionSubTab, setAuctionSubTab] = useState<'import' | 'sourcing' | 'bidding'>('sourcing');
   const [optReqId, setOptReqId] = useState<string>('');
   const [optTitle, setOptTitle] = useState('');
   const [optHouse, setOptHouse] = useState('USS Tokyo');
@@ -218,37 +383,11 @@ export function StaffConsoleView({
   const [optMileage, setOptMileage] = useState(32000);
   const [optFob, setOptFob] = useState(19500);
   const [optNotes, setOptNotes] = useState('');
-
-  // Quotation form state
-  const customerUsers = useMemo(
-    () => users.filter((u) => u.role === 'customer' || u.role === 'dealer'),
-    [users]
-  );
-  const [qCustomerId, setQCustomerId] = useState(customerUsers[0]?.uid || 'cust-kenya-01');
-  const [qSourcingId, setQSourcingId] = useState('');
-  const [qVehicleId, setQVehicleId] = useState(vehicles[0]?.id || '');
-  const [qTitle, setQTitle] = useState(
-    vehicles[0] ? `${vehicles[0].year} ${vehicles[0].make} ${vehicles[0].model}` : ''
-  );
-  const [qStockCode, setQStockCode] = useState(vehicles[0]?.stockCode || 'AUZ-AUC-8821');
-  const [qPortId, setQPortId] = useState('mombasa-ke');
-  const [qFob, setQFob] = useState(18500);
-  const [qAuctionFee, setQAuctionFee] = useState(550);
-  const [qExportDocs, setQExportDocs] = useState(250);
-  const [qJevic, setQJevic] = useState(285);
-  const [qFreight, setQFreight] = useState(1450);
-  const [qInsurance, setQInsurance] = useState(310);
-  const [qMaxBid, setQMaxBid] = useState(19000);
-  const [qNotes, setQNotes] = useState(
-    'Fixed fees: Export Docs & Inspection. Variable estimates: Auction Hammer (capped by Max Bid Ceiling) & Sea Freight.'
-  );
-
-  // Bid Ceiling Validator state
   const [bidOrderId, setBidOrderId] = useState(orders[0]?.id || '');
-  const [bidAmountUsd, setBidAmountUsd] = useState(34000);
+  const [bidAmountUsd, setBidAmountUsd] = useState(25000);
   const [bidGuardResult, setBidGuardResult] = useState<{ ok: boolean; text: string } | null>(null);
 
-  // Order Logistics & Messaging state
+  // Orders & Logistics State
   const [selectedOrderId, setSelectedOrderId] = useState(orders[0]?.id || '');
   const selectedOrder = useMemo(
     () => orders.find((o) => o.id === selectedOrderId) || orders[0] || null,
@@ -277,14 +416,7 @@ export function StaffConsoleView({
     setEditEstimate(ord.scheduleIsEstimate);
   };
 
-  // Inventory Modal & inline delete confirm
-  const [vehicleModalOpen, setVehicleModalOpen] = useState(false);
-  const [editingVehicle, setEditingVehicle] = useState<Vehicle | null>(null);
-  const [isImportMode, setIsImportMode] = useState(false);
-  const [showAuctionImporter, setShowAuctionImporter] = useState(true);
-  const [confirmDeleteVehId, setConfirmDeleteVehId] = useState<string | null>(null);
-
-  // Document Manager form
+  // Document Vault State
   const [docOrderId, setDocOrderId] = useState(orders[0]?.id || '');
   const [docTitle, setDocTitle] = useState('');
   const [docType, setDocType] = useState<ExportDocType>('bill_of_lading');
@@ -293,1602 +425,1832 @@ export function StaffConsoleView({
   const [docVisible, setDocVisible] = useState(true);
   const [docNotes, setDocNotes] = useState('');
 
-  // Settings form
-  const [settingsDraft, setSettingsDraft] = useState<CompanySettings>(settings);
-  const [confirmClearData, setConfirmClearData] = useState(false);
+  // Full JSON Database Backup Downloader
+  const handleDownloadFullBackup = () => {
+    const snapshot = {
+      exportedAt: new Date().toISOString(),
+      company: settings.companyName,
+      counts: {
+        vehicles: vehicles.length,
+        users: users.length,
+        sourcingRequests: sourcingRequests.length,
+        quotations: quotations.length,
+        orders: orders.length,
+        inquiries: inquiries.length,
+        documents: documents.length,
+        financeRecords: financeRecords.length,
+        hrEmployees: hrEmployees.length,
+        hrLeaveRequests: hrLeaveRequests.length,
+        teamTasks: teamTasks.length,
+        salesTargets: salesTargets.length,
+      },
+      data: {
+        vehicles,
+        users,
+        sourcingRequests,
+        quotations,
+        orders,
+        inquiries,
+        documents,
+        financeRecords,
+        hrEmployees,
+        hrLeaveRequests,
+        teamTasks,
+        salesTargets,
+        companySettings: {
+          companyName: settings.companyName,
+          tagline: settings.tagline,
+          officeAddress: settings.officeAddress,
+          supportEmail: settings.supportEmail,
+          whatsappPhone: settings.whatsappPhone,
+          invoiceValidityDays: settings.invoiceValidityDays,
+        },
+      },
+    };
+    const blob = new Blob([JSON.stringify(snapshot, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `auzio-traders-backup-${new Date().toISOString().slice(0, 10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    onNotify('Full database JSON backup downloaded');
+  };
 
-  if (!isStaff) {
+  // Sidebar Navigation Definition
+  const navItems = useMemo(() => {
+    const all: Array<{
+      id: ConsoleSection;
+      label: string;
+      icon: typeof LayoutDashboard;
+      moduleKey: AdminModuleKey;
+      badge?: number;
+    }> = [
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard, moduleKey: 'dashboard' },
+      {
+        id: 'crm',
+        label: 'CRM & Leads',
+        icon: Users,
+        moduleKey: 'crm',
+        badge: inquiries.filter((i) => i.status === 'received').length || undefined,
+      },
+      { id: 'sales', label: 'Sales', icon: TrendingUp, moduleKey: 'sales' },
+      { id: 'inventory', label: 'Inventory', icon: Car, moduleKey: 'inventory' },
+      {
+        id: 'auctions',
+        label: 'Auctions',
+        icon: Gavel,
+        moduleKey: 'auctions',
+        badge: sourcingRequests.filter((r) => r.status === 'new').length || undefined,
+      },
+      { id: 'orders', label: 'Orders', icon: Package, moduleKey: 'orders' },
+      { id: 'logistics', label: 'Logistics', icon: Ship, moduleKey: 'logistics' },
+      { id: 'accounts', label: 'Accounts', icon: CreditCard, moduleKey: 'accounts' },
+      {
+        id: 'hr',
+        label: 'Human Resources',
+        icon: Briefcase,
+        moduleKey: 'hr',
+        badge: hrLeaveRequests.filter((l) => l.status === 'pending').length || undefined,
+      },
+      { id: 'documents', label: 'Documents', icon: FileText, moduleKey: 'documents' },
+      { id: 'reports', label: 'Reports', icon: FileBarChart2, moduleKey: 'reports' },
+      { id: 'cms', label: 'Website CMS', icon: Globe, moduleKey: 'cms' },
+      { id: 'ai', label: 'AI Assistant', icon: Bot, moduleKey: 'ai' },
+      { id: 'users', label: 'Users & Roles', icon: Shield, moduleKey: 'users' },
+      { id: 'settings', label: 'Settings', icon: Settings, moduleKey: 'settings' },
+    ];
+    return all.filter((item) => can(item.moduleKey, 'view'));
+  }, [role, staffProfile, inquiries, sourcingRequests, hrLeaveRequests]);
+
+  // Universal Search Results across all modules
+  const universalResults = useMemo(() => {
+    const q = universalSearch.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const results: Array<{
+      id: string;
+      category: string;
+      title: string;
+      subtitle: string;
+      section: ConsoleSection;
+      onSelect?: () => void;
+    }> = [];
+
+    if (can('orders', 'view')) {
+      for (const o of orders) {
+        if (
+          o.orderNumber.toLowerCase().includes(q) ||
+          o.trackingCode.toLowerCase().includes(q) ||
+          o.vehicleTitle.toLowerCase().includes(q) ||
+          o.customerCompany.toLowerCase().includes(q) ||
+          o.blNumber.toLowerCase().includes(q)
+        ) {
+          results.push({
+            id: `ord-${o.id}`,
+            category: 'Order',
+            title: `${o.orderNumber} — ${o.vehicleTitle}`,
+            subtitle: `${o.customerCompany} · ${TRADE_MILESTONE_META[o.milestone]?.shortLabel}`,
+            section: 'orders',
+            onSelect: () => selectOrderForEdit(o),
+          });
+        }
+      }
+    }
+
+    if (can('inventory', 'view')) {
+      for (const v of vehicles) {
+        if (
+          v.stockCode.toLowerCase().includes(q) ||
+          v.make.toLowerCase().includes(q) ||
+          v.model.toLowerCase().includes(q) ||
+          v.chassisCode.toLowerCase().includes(q)
+        ) {
+          results.push({
+            id: `veh-${v.id}`,
+            category: 'Vehicle',
+            title: `${v.stockCode} — ${v.year} ${v.make} ${v.model}`,
+            subtitle: `${v.status.toUpperCase()} · ${fmt(v.fobPriceUsd)}`,
+            section: 'inventory',
+            onSelect: () => setInvSearch(v.stockCode),
+          });
+        }
+      }
+    }
+
+    if (can('crm', 'view')) {
+      for (const u of users) {
+        if (
+          u.displayName.toLowerCase().includes(q) ||
+          u.companyName.toLowerCase().includes(q) ||
+          u.email.toLowerCase().includes(q)
+        ) {
+          results.push({
+            id: `usr-${u.uid}`,
+            category: 'Contact',
+            title: u.companyName || u.displayName,
+            subtitle: `${u.email} · ${ROLE_METADATA[u.role]?.label || u.role}`,
+            section: ROLE_METADATA[u.role]?.isStaff && can('users', 'view') ? 'users' : 'crm',
+          });
+        }
+      }
+      for (const inq of inquiries) {
+        if (
+          inq.buyerName.toLowerCase().includes(q) ||
+          inq.trackingCode.toLowerCase().includes(q) ||
+          inq.vehicleTitle.toLowerCase().includes(q)
+        ) {
+          results.push({
+            id: `inq-${inq.id}`,
+            category: 'Lead',
+            title: `${inq.buyerName} — ${inq.vehicleTitle}`,
+            subtitle: `${inq.trackingCode} · ${inq.destinationPortName}`,
+            section: 'crm',
+          });
+        }
+      }
+    }
+
+    if (can('accounts', 'view')) {
+      for (const f of financeRecords) {
+        if (
+          f.referenceCode.toLowerCase().includes(q) ||
+          f.counterpartyName.toLowerCase().includes(q)
+        ) {
+          results.push({
+            id: `fin-${f.id}`,
+            category: 'Finance',
+            title: `${f.referenceCode} — ${f.counterpartyName}`,
+            subtitle: `${f.type.toUpperCase()} · ${fmt(f.amountUsd)} (${f.status})`,
+            section: 'accounts',
+          });
+        }
+      }
+    }
+
+    if (can('hr', 'view')) {
+      for (const emp of hrEmployees) {
+        if (
+          emp.fullName.toLowerCase().includes(q) ||
+          emp.employeeCode.toLowerCase().includes(q) ||
+          emp.department.toLowerCase().includes(q)
+        ) {
+          results.push({
+            id: `emp-${emp.id}`,
+            category: 'Employee',
+            title: `${emp.fullName} (${emp.employeeCode})`,
+            subtitle: `${emp.jobTitle} · ${emp.department}`,
+            section: 'hr',
+          });
+        }
+      }
+    }
+
+    return results.slice(0, 10);
+  }, [universalSearch, orders, vehicles, users, inquiries, financeRecords, hrEmployees, role, staffProfile]);
+
+  // Internal Notifications List
+  const notifications = useMemo(() => {
+    const list: Array<{ id: string; title: string; detail: string; section: ConsoleSection }> = [];
+    const newLeads = inquiries.filter((i) => i.status === 'received');
+    if (newLeads.length > 0 && can('crm', 'view')) {
+      list.push({
+        id: 'n-leads',
+        title: `${newLeads.length} new buyer inquir${newLeads.length === 1 ? 'y' : 'ies'}`,
+        detail: 'Waiting for sales follow-up and CIF confirmation.',
+        section: 'crm',
+      });
+    }
+    const newSourcing = sourcingRequests.filter((r) => r.status === 'new');
+    if (newSourcing.length > 0 && can('auctions', 'view')) {
+      list.push({
+        id: 'n-sourcing',
+        title: `${newSourcing.length} open auction sourcing request${newSourcing.length === 1 ? '' : 's'}`,
+        detail: 'Attach shortlisted Japanese auction lots & translated notes.',
+        section: 'auctions',
+      });
+    }
+    const approvedQuotes = quotations.filter((q) => q.status === 'approved');
+    if (approvedQuotes.length > 0 && can('sales', 'view')) {
+      list.push({
+        id: 'n-quotes',
+        title: `${approvedQuotes.length} customer-approved quotation${approvedQuotes.length === 1 ? '' : 's'}`,
+        detail: 'Ready to convert into active Export Orders.',
+        section: 'sales',
+      });
+    }
+    const pendingLeaves = hrLeaveRequests.filter((l) => l.status === 'pending');
+    if (pendingLeaves.length > 0 && can('hr', 'view')) {
+      list.push({
+        id: 'n-leaves',
+        title: `${pendingLeaves.length} pending HR leave request${pendingLeaves.length === 1 ? '' : 's'}`,
+        detail: 'Awaiting manager approval or rejection.',
+        section: 'hr',
+      });
+    }
+    const overdueFin = financeRecords.filter((f) => f.status === 'overdue');
+    if (overdueFin.length > 0 && can('accounts', 'view')) {
+      list.push({
+        id: 'n-overdue',
+        title: `${overdueFin.length} overdue invoice${overdueFin.length === 1 ? '' : 's'}`,
+        detail: 'Follow up with buyer for TT remittance confirmation.',
+        section: 'accounts',
+      });
+    }
+    return list;
+  }, [inquiries, sourcingRequests, quotations, hrLeaveRequests, financeRecords, role, staffProfile]);
+
+  const filteredVehicles = useMemo(() => {
+    const q = invSearch.trim().toLowerCase();
+    return vehicles.filter((v) => {
+      if (invStatusFilter !== 'ALL' && v.status !== invStatusFilter) return false;
+      if (!q) return true;
+      return (
+        v.stockCode.toLowerCase().includes(q) ||
+        v.make.toLowerCase().includes(q) ||
+        v.model.toLowerCase().includes(q) ||
+        v.chassisCode.toLowerCase().includes(q)
+      );
+    });
+  }, [vehicles, invSearch, invStatusFilter]);
+
+  // Restricted Fallback for non-staff visitors/customers
+  if (!isAuthorizedStaff) {
     return (
-      <div className="max-w-xl mx-auto px-4 py-16 text-center space-y-5">
-        <div className="w-12 h-12 rounded-xl bg-slate-950 text-amber-400 flex items-center justify-center mx-auto">
-          <Lock className="w-6 h-6" />
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-6">
+        <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-5 shadow-sm">
+          <div className="w-12 h-12 rounded-xl bg-slate-950 text-amber-400 flex items-center justify-center mx-auto">
+            <Lock className="w-6 h-6" />
+          </div>
+          <h1 className="text-xl font-bold text-slate-950">Auzio Traders Admin Console</h1>
+          <p className="text-sm text-slate-600">
+            This management system is restricted to authorized Auzio Traders team members. Please
+            sign in with your company account.
+          </p>
+          <div className="flex flex-col sm:flex-row gap-2.5 justify-center">
+            <button
+              type="button"
+              onClick={onOpenStaffLogin}
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-slate-950 rounded-lg hover:bg-slate-800 cursor-pointer"
+            >
+              <Lock className="w-4 h-4 text-amber-400" />
+              Sign In
+            </button>
+            <button
+              type="button"
+              onClick={onExitConsole}
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 text-sm font-semibold text-slate-700 bg-slate-100 rounded-lg hover:bg-slate-200 cursor-pointer"
+            >
+              Return to Website
+            </button>
+          </div>
         </div>
-        <h1 className="text-2xl font-bold text-slate-950">Management / Staff Console Restricted</h1>
-        <p className="text-sm text-slate-600">
-          This workspace is restricted to authorized AUZIO TRADERS Sales, Operations, and
-          Administrator accounts. Customer accounts cannot access internal staff workflows.
-        </p>
-        <button
-          type="button"
-          onClick={onOpenStaffLogin}
-          className="inline-flex items-center gap-2 px-5 py-2.5 text-sm font-semibold text-white bg-slate-950 rounded-lg hover:bg-slate-800 cursor-pointer"
-        >
-          <Lock className="w-4 h-4 text-amber-400" />
-          Open Staff / Admin Login Portal
-        </button>
       </div>
     );
   }
 
-  const allTabs: { id: StaffTab; label: string; icon: typeof LayoutDashboard; allowed: boolean }[] = [
-    { id: 'overview', label: 'Overview Metrics', icon: LayoutDashboard, allowed: true },
-    { id: 'sourcing', label: 'Sourcing Queue', icon: ClipboardList, allowed: true },
-    { id: 'quotations', label: 'Quotations & Bid Guard', icon: Gavel, allowed: canQuote },
-    { id: 'orders', label: 'Orders & Vessel Logistics', icon: Package, allowed: true },
-    { id: 'inventory', label: 'Inventory Manager', icon: Database, allowed: canInventory },
-    { id: 'documents', label: 'Document Manager', icon: FileText, allowed: canInventory },
-    { id: 'cms', label: 'Landing CMS & Reviews', icon: Edit3, allowed: isAdmin },
-    { id: 'audit', label: 'Audit Trail', icon: ShieldAlert, allowed: isAdmin },
-    { id: 'settings', label: 'System Settings', icon: Settings, allowed: isAdmin },
-  ];
-
-  const visibleTabs = allTabs.filter((t) => t.allowed);
+  const activeNavMeta = navItems.find((n) => n.id === activeSection) || navItems[0];
+  const roleLabel =
+    role !== 'visitor' ? ROLE_METADATA[role]?.label || role : 'Staff';
 
   return (
-    <div className="max-w-[1440px] mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
-      {/* Staff Console Header */}
-      <div className="bg-slate-950 text-white rounded-xl p-6 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2 text-xs font-mono text-amber-400">
-            <span>AUZIO TRADERS OPERATIONS CONSOLE</span>
-            <span className="text-slate-600">|</span>
-            <span>ROLE: {role.toUpperCase()}</span>
-            <span className="text-slate-600">|</span>
-            <span>{isLiveFirestoreMode ? 'LIVE FIRESTORE' : 'DEMO PREVIEW'}</span>
-          </div>
-          <h1 className="text-2xl font-bold tracking-tight mt-1">
-            Yokohama Trade, Bidding &amp; Export Logistics Desk
-          </h1>
-          <p className="text-xs text-slate-400 mt-0.5">
-            Signed in as {staffProfile?.displayName || role.toUpperCase()} (
-            {staffProfile?.email || 'staff@auziotraders.com'})
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 text-xs">
-          {canInventory && (
-            <button
-              type="button"
-              onClick={() => {
-                setEditingVehicle(null);
-                setVehicleModalOpen(true);
-              }}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg cursor-pointer"
-            >
-              <Plus className="w-4 h-4" />
-              Add Vehicle
-            </button>
-          )}
-          {isAdmin && (
-            <button
-              type="button"
-              onClick={() => setActiveTab('settings')}
-              className="inline-flex items-center gap-1.5 px-3.5 py-2 font-semibold text-slate-200 bg-slate-900 border border-slate-700 hover:bg-slate-800 rounded-lg cursor-pointer"
-            >
-              <Settings className="w-4 h-4 text-amber-400" />
-              Admin &amp; Seed Controls
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* Role-Scoped Navigation Tabs */}
-      <div className="border-b border-slate-200 flex items-center gap-1 overflow-x-auto">
-        {visibleTabs.map((tab) => {
-          const Icon = tab.icon;
-          const isActive = activeTab === tab.id;
-          return (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`px-3.5 py-3 text-xs font-semibold whitespace-nowrap border-b-2 flex items-center gap-1.5 transition-colors cursor-pointer ${
-                isActive
-                  ? 'border-amber-600 text-slate-950'
-                  : 'border-transparent text-slate-600 hover:text-slate-950'
-              }`}
-            >
-              <Icon className="w-3.5 h-3.5" />
-              <span>{tab.label}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* TAB 1: OVERVIEW METRICS */}
-      {activeTab === 'overview' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <div className="text-xs text-slate-500">Active Stock &amp; Lots</div>
-              <div className="text-2xl font-extrabold font-mono text-slate-950 mt-1">
-                {vehicles.filter((v) => v.status !== 'archived').length}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1">
-                {vehicles.filter((v) => v.listingType === 'auzio_stock').length} physical yard units
-              </div>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <div className="text-xs text-slate-500">Sourcing Queue</div>
-              <div className="text-2xl font-extrabold font-mono text-amber-700 mt-1">
-                {sourcingRequests.length}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1">
-                {sourcingRequests.filter((r) => r.status === 'new').length} awaiting options
-              </div>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <div className="text-xs text-slate-500">Active Quotations</div>
-              <div className="text-2xl font-extrabold font-mono text-slate-950 mt-1">
-                {quotations.length}
-              </div>
-              <div className="text-[11px] text-emerald-700 font-medium mt-1">
-                {quotations.filter((q) => q.status === 'approved').length} customer approved
-              </div>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <div className="text-xs text-slate-500">Active Export Orders</div>
-              <div className="text-2xl font-extrabold font-mono text-slate-950 mt-1">
-                {orders.length}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1">
-                {fmt(orders.reduce((acc, o) => acc + o.totalCifUsd, 0))} pipeline CIF
-              </div>
-            </div>
-            <div className="bg-white border border-slate-200 rounded-xl p-4">
-              <div className="text-xs text-slate-500">Public Quick Inquiries</div>
-              <div className="text-2xl font-extrabold font-mono text-slate-950 mt-1">
-                {inquiries.length}
-              </div>
-              <div className="text-[11px] text-slate-500 mt-1">
-                Visitor quotes &amp; 48h holds
-              </div>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-              <h2 className="text-sm font-bold text-slate-950">Recent Export Orders</h2>
-              <div className="divide-y divide-slate-100 text-xs">
-                {orders.slice(0, 5).map((ord) => (
-                  <div key={ord.id} className="py-2.5 flex items-center justify-between gap-3">
-                    <div>
-                      <div className="font-semibold text-slate-950">
-                        {ord.orderNumber} — {ord.vehicleTitle}
-                      </div>
-                      <div className="text-slate-500">
-                        {ord.customerCompany} · {ord.destinationPortName}
-                      </div>
-                    </div>
-                    <div className="text-right shrink-0">
-                      <div className="font-mono font-bold text-slate-900">
-                        {fmt(ord.totalCifUsd)}
-                      </div>
-                      <div className="text-[11px] text-amber-800 font-medium">
-                        {TRADE_MILESTONE_META[ord.milestone]?.shortLabel}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-              <h2 className="text-sm font-bold text-slate-950">Recent Public Visitor Inquiries</h2>
-              {inquiries.length === 0 ? (
-                <p className="text-xs text-slate-500 py-4">
-                  Visitor CIF inquiries and 48-hour hold requests submitted from the public
-                  storefront will appear here.
-                </p>
-              ) : (
-                <div className="divide-y divide-slate-100 text-xs">
-                  {inquiries.slice(0, 5).map((inq) => (
-                    <div key={inq.id} className="py-2.5 flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-semibold text-slate-950">
-                          {inq.buyerName} ({inq.buyerCountry}) — {inq.vehicleStockCode}
-                        </div>
-                        <div className="text-slate-500">
-                          {inq.buyerEmail} · {inq.destinationPortName}
-                        </div>
-                      </div>
-                      <div className="text-right font-mono shrink-0">
-                        <div className="font-semibold text-slate-900">{inq.trackingCode}</div>
-                        <div className="text-[11px] text-amber-700">{fmt(inq.quotedCifUsd)}</div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
+    <div className="min-h-screen flex bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
+      {/* Mobile Sidebar Backdrop */}
+      {mobileSidebarOpen && (
+        <div
+          onClick={() => setMobileSidebarOpen(false)}
+          className="fixed inset-0 z-40 bg-slate-950/60 backdrop-blur-xs lg:hidden"
+        />
       )}
 
-      {/* TAB 2: SOURCING QUEUE */}
-      {activeTab === 'sourcing' && (
-        <div className="space-y-4">
-          {sourcingRequests.map((req) => (
-            <div
-              key={req.id}
-              className="bg-white border border-slate-200 rounded-xl p-5 space-y-4"
-            >
-              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 pb-3">
-                <div>
-                  <div className="text-xs font-mono text-amber-700 font-semibold">
-                    {req.requestCode} · {req.customerCompany} ({req.customerName})
-                  </div>
-                  <h3 className="text-base font-bold text-slate-950 mt-0.5">
-                    {req.yearMin}–{req.yearMax} {req.make} {req.model} (Qty {req.quantity})
-                  </h3>
-                  <div className="text-xs text-slate-600 mt-1">
-                    Budget Ceiling: <strong className="font-mono">{fmt(req.maxBudgetUsd)}</strong> ·
-                    Max {req.mileageMaxKm.toLocaleString()} km · Grade {req.gradePref} · Port:{' '}
-                    {getPortById(req.destinationPortId).name}
-                  </div>
-                  {req.notes && (
-                    <p className="text-xs text-slate-500 mt-1">Buyer Notes: {req.notes}</p>
-                  )}
+      {/* Collapsible Vertical Sidebar */}
+      <aside
+        className={`fixed lg:sticky top-0 left-0 z-50 h-screen flex flex-col bg-slate-950 text-slate-200 border-r border-slate-800 transition-all duration-200 shrink-0 ${
+          sidebarCollapsed ? 'lg:w-[74px]' : 'lg:w-64'
+        } w-64 ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'}`}
+      >
+        {/* Brand Header */}
+        <div className="h-16 px-4 border-b border-slate-800 flex items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <img
+              src={OFFICIAL_LOGO_URL}
+              alt="Auzio Traders"
+              className="w-9 h-9 rounded-full object-cover bg-white border border-slate-700 shrink-0"
+            />
+            {!sidebarCollapsed && (
+              <div className="leading-tight truncate">
+                <div className="text-sm font-extrabold tracking-tight text-white truncate">
+                  AUZIO <span className="text-amber-400">TRADERS</span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="px-2.5 py-1 text-xs font-semibold uppercase rounded bg-slate-100 text-slate-800">
-                    {req.status.replace('_', ' ')}
-                  </span>
-                  {canQuote && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setQSourcingId(req.id);
-                        setQCustomerId(req.customerId);
-                        setQTitle(`${req.yearMax} ${req.make} ${req.model}`);
-                        setQPortId(req.destinationPortId);
-                        setQFob(Math.round(req.maxBudgetUsd * 0.85));
-                        setQMaxBid(Math.round(req.maxBudgetUsd * 0.88));
-                        setActiveTab('quotations');
-                      }}
-                      className="px-3 py-1.5 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg cursor-pointer"
-                    >
-                      Prepare Quotation →
-                    </button>
-                  )}
-                </div>
+                <div className="text-[11px] text-slate-400 truncate">Management System</div>
               </div>
-
-              {/* Existing Shortlisted Options */}
-              {req.options.length > 0 && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {req.options.map((o) => (
-                    <div
-                      key={o.id}
-                      className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs space-y-1"
-                    >
-                      <div className="flex justify-between font-semibold text-slate-950">
-                        <span>{o.title}</span>
-                        <span className="font-mono text-amber-800">{fmt(o.estFobUsd)}</span>
-                      </div>
-                      <div className="font-mono text-[11px] text-slate-500">
-                        {o.auctionHouse} Lot #{o.lotNumber} · Grade {o.grade} ·{' '}
-                        {o.mileageKm.toLocaleString()} km
-                      </div>
-                      <p className="text-[11px] text-slate-600">{o.translatedNotes}</p>
-                    </div>
-                  ))}
-                </div>
-              )}
-
-              {/* Attach Auction Option + Translated Sheet Notes */}
-              {optReqId === req.id ? (
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    await onAttachSourcingOption(req, {
-                      id: `opt-${Date.now()}`,
-                      title: optTitle,
-                      auctionHouse: optHouse,
-                      lotNumber: optLot,
-                      grade: optGrade,
-                      mileageKm: Number(optMileage),
-                      estFobUsd: Number(optFob),
-                      translatedNotes: optNotes,
-                    });
-                    setOptReqId('');
-                    setOptTitle('');
-                    setOptLot('');
-                    setOptNotes('');
-                  }}
-                  className="p-4 bg-amber-50/60 border border-amber-200 rounded-lg space-y-3"
-                >
-                  <div className="text-xs font-bold text-slate-900">
-                    Attach Shortlisted Auction Option &amp; Translated Sheet Notes
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                    <input
-                      type="text"
-                      required
-                      value={optTitle}
-                      onChange={(e) => setOptTitle(e.target.value)}
-                      placeholder="Vehicle Title (e.g. 2022 Hilux Z 4WD)"
-                      className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                    />
-                    <input
-                      type="text"
-                      required
-                      value={optHouse}
-                      onChange={(e) => setOptHouse(e.target.value)}
-                      placeholder="USS Tokyo / TAA Kanto"
-                      className="px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                    />
-                    <input
-                      type="text"
-                      required
-                      value={optLot}
-                      onChange={(e) => setOptLot(e.target.value)}
-                      placeholder="Lot Number (e.g. 64120)"
-                      className="px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-md"
-                    />
-                    <input
-                      type="text"
-                      value={optGrade}
-                      onChange={(e) => setOptGrade(e.target.value)}
-                      placeholder="Grade (4.5 / A)"
-                      className="px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-md"
-                    />
-                    <input
-                      type="number"
-                      value={optMileage}
-                      onChange={(e) => setOptMileage(Number(e.target.value))}
-                      placeholder="Mileage km"
-                      className="px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-md"
-                    />
-                    <input
-                      type="number"
-                      value={optFob}
-                      onChange={(e) => setOptFob(Number(e.target.value))}
-                      placeholder="Est FOB USD"
-                      className="px-2.5 py-1.5 text-xs font-mono bg-white border border-slate-300 rounded-md"
-                    />
-                  </div>
-                  <textarea
-                    rows={2}
-                    required
-                    value={optNotes}
-                    onChange={(e) => setOptNotes(e.target.value)}
-                    placeholder="English translation of Japanese auction inspector remarks..."
-                    className="w-full px-2.5 py-1.5 text-xs bg-white border border-slate-300 rounded-md"
-                  />
-                  <div className="flex gap-2">
-                    <button
-                      type="submit"
-                      className="px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-950 rounded-md cursor-pointer"
-                    >
-                      Save &amp; Send Option to Customer
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setOptReqId('')}
-                      className="px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-md cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </form>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setOptReqId(req.id)}
-                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-800 hover:text-amber-950 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  Attach Auction Option &amp; Translated Sheet Notes
-                </button>
-              )}
-            </div>
-          ))}
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setMobileSidebarOpen(false)}
+            className="lg:hidden p-1.5 text-slate-400 hover:text-white cursor-pointer"
+            aria-label="Close menu"
+          >
+            <X className="w-5 h-5" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed((c) => !c)}
+            className="hidden lg:flex p-1.5 rounded-md text-slate-400 hover:text-white hover:bg-slate-800 cursor-pointer"
+            aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {sidebarCollapsed ? (
+              <ChevronRight className="w-4 h-4" />
+            ) : (
+              <ChevronLeft className="w-4 h-4" />
+            )}
+          </button>
         </div>
-      )}
 
-      {/* TAB 3: QUOTATIONS & SERVER-ENFORCED BID CEILING GUARD */}
-      {activeTab === 'quotations' && canQuote && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          {/* Bid Ceiling Guard Validator */}
-          <div className="lg:col-span-5 space-y-5">
-            <div className="bg-slate-950 text-white rounded-xl p-5 space-y-4">
-              <div className="flex items-center gap-2 text-xs font-mono text-amber-400">
-                <ShieldCheck className="w-4 h-4" />
-                <span>AUCTION BID CEILING GUARD (SERVER-ENFORCED)</span>
-              </div>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                Enter a live auction bid for an approved order. Any attempt exceeding the
-                customer&apos;s authorized maximum bid ceiling is strictly blocked by both the
-                application guard and Firestore security rules, and logged to the Audit Trail.
-              </p>
-
-              <div className="space-y-3">
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">Target Export Order</label>
-                  <select
-                    value={bidOrderId}
-                    onChange={(e) => {
-                      setBidOrderId(e.target.value);
-                      setBidGuardResult(null);
-                    }}
-                    className="w-full px-3 py-2 text-xs bg-slate-900 border border-slate-700 rounded-lg text-white"
-                  >
-                    {orders.map((o) => (
-                      <option key={o.id} value={o.id}>
-                        {o.orderNumber} — {o.vehicleStockCode} (Ceiling: $
-                        {o.authorizedMaxBidUsd.toLocaleString()})
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-[11px] text-slate-400 mb-1">
-                    Proposed Auction Bid Amount (USD)
-                  </label>
-                  <input
-                    type="number"
-                    min={500}
-                    step={100}
-                    value={bidAmountUsd}
-                    onChange={(e) => setBidAmountUsd(Number(e.target.value))}
-                    className="w-full px-3 py-2 text-sm font-mono bg-slate-900 border border-slate-700 rounded-lg text-white"
-                  />
-                </div>
-
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const target = orders.find((o) => o.id === bidOrderId);
-                    if (!target) return;
-                    const res = await onPlaceAuctionBid(target, bidAmountUsd);
-                    setBidGuardResult({
-                      ok: res.ok,
-                      text: res.ok
-                        ? `Bid of $${bidAmountUsd.toLocaleString()} USD accepted within $${target.authorizedMaxBidUsd.toLocaleString()} ceiling and recorded to Audit Trail.`
-                        : res.error || 'Bid blocked.',
-                    });
-                  }}
-                  className="w-full py-2.5 px-4 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg cursor-pointer"
-                >
-                  Validate &amp; Submit Auction Bid
-                </button>
-
-                {bidGuardResult && (
-                  <div
-                    className={`p-3 rounded-lg text-xs flex items-start gap-2 ${
-                      bidGuardResult.ok
-                        ? 'bg-emerald-950 border border-emerald-700 text-emerald-200'
-                        : 'bg-red-950 border border-red-700 text-red-200'
+        {/* Navigation Links */}
+        <nav className="flex-1 overflow-y-auto px-2.5 py-4 space-y-1">
+          {navItems.map((item) => {
+            const Icon = item.icon;
+            const isActive = activeSection === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                title={sidebarCollapsed ? item.label : undefined}
+                onClick={() => {
+                  setActiveSection(item.id);
+                  setMobileSidebarOpen(false);
+                }}
+                className={`w-full flex items-center justify-between gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                  isActive
+                    ? 'bg-amber-500 text-slate-950 font-bold shadow-xs'
+                    : 'text-slate-300 hover:bg-slate-900 hover:text-white'
+                }`}
+              >
+                <span className="flex items-center gap-3 min-w-0">
+                  <Icon className="w-4 h-4 shrink-0" />
+                  {!sidebarCollapsed && <span className="truncate">{item.label}</span>}
+                </span>
+                {!sidebarCollapsed && item.badge ? (
+                  <span
+                    className={`px-1.5 py-0.5 text-[10px] font-bold font-mono rounded-md ${
+                      isActive ? 'bg-slate-950 text-amber-400' : 'bg-amber-500/20 text-amber-400'
                     }`}
                   >
-                    {bidGuardResult.ok ? (
-                      <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" />
-                    ) : (
-                      <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
-                    )}
-                    <span>{bidGuardResult.text}</span>
+                    {item.badge}
+                  </span>
+                ) : null}
+              </button>
+            );
+          })}
+        </nav>
+
+        {/* Sidebar Footer: User Profile & Exit */}
+        <div className="p-3 border-t border-slate-800 space-y-2 shrink-0">
+          {!sidebarCollapsed && (
+            <div className="px-2 py-1.5 rounded-lg bg-slate-900/90 border border-slate-800">
+              <div className="text-xs font-bold text-white truncate">
+                {staffProfile?.displayName || 'Team Member'}
+              </div>
+              <div className="text-[11px] text-amber-400 truncate">{roleLabel}</div>
+            </div>
+          )}
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={onExitConsole}
+              title="Return to Public Website"
+              className="flex-1 inline-flex items-center justify-center gap-1.5 px-2.5 py-2 text-xs font-semibold text-slate-300 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg cursor-pointer"
+            >
+              <ArrowLeft className="w-3.5 h-3.5 shrink-0" />
+              {!sidebarCollapsed && <span>Website</span>}
+            </button>
+            <button
+              type="button"
+              onClick={onSignOut}
+              title="Sign Out"
+              aria-label="Sign Out"
+              className="p-2 text-slate-400 hover:text-red-400 bg-slate-900 hover:bg-slate-800 border border-slate-800 rounded-lg cursor-pointer"
+            >
+              <LogOut className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Workspace Area */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Top Utility Header */}
+        <header className="sticky top-0 z-30 h-16 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-b border-slate-200 dark:border-slate-800 px-4 sm:px-6 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-3 min-w-0">
+            <button
+              type="button"
+              onClick={() => setMobileSidebarOpen(true)}
+              aria-label="Open navigation"
+              className="lg:hidden p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 cursor-pointer"
+            >
+              <Menu className="w-5 h-5" />
+            </button>
+            <div className="min-w-0">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 truncate">
+                Auzio Traders Admin Console
+              </div>
+              <h1 className="text-base sm:text-lg font-bold text-slate-950 dark:text-white leading-tight truncate">
+                {activeNavMeta?.label || 'Dashboard'}
+              </h1>
+            </div>
+          </div>
+
+          {/* Universal Search Bar */}
+          <div className="relative flex-1 max-w-md hidden md:block">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={universalSearch}
+              onFocus={() => setSearchFocused(true)}
+              onBlur={() => setTimeout(() => setSearchFocused(false), 180)}
+              onChange={(e) => setUniversalSearch(e.target.value)}
+              placeholder="Search orders, vehicles, customers, invoices, staff..."
+              className="w-full pl-10 pr-4 py-2 text-sm bg-slate-100 dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:border-amber-500"
+            />
+            {searchFocused && universalSearch.trim().length >= 2 && (
+              <div className="absolute left-0 right-0 top-full mt-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl overflow-hidden z-50">
+                {universalResults.length === 0 ? (
+                  <div className="p-4 text-xs text-slate-500 dark:text-slate-400 text-center">
+                    No matching records for &ldquo;{universalSearch}&rdquo;
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-80 overflow-y-auto">
+                    {universalResults.map((res) => (
+                      <button
+                        key={res.id}
+                        type="button"
+                        onMouseDown={() => {
+                          setActiveSection(res.section);
+                          res.onSelect?.();
+                          setUniversalSearch('');
+                          setSearchFocused(false);
+                        }}
+                        className="w-full text-left px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center justify-between gap-3 cursor-pointer"
+                      >
+                        <div className="min-w-0">
+                          <div className="text-xs font-bold text-slate-950 dark:text-white truncate">
+                            {res.title}
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                            {res.subtitle}
+                          </div>
+                        </div>
+                        <span className="px-2 py-0.5 text-[10px] font-bold uppercase rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 shrink-0">
+                          {res.category}
+                        </span>
+                      </button>
+                    ))}
                   </div>
                 )}
               </div>
-            </div>
-
-            {/* Existing Quotations List */}
-            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-3">
-              <h3 className="text-sm font-bold text-slate-950">
-                Issued Quotations ({quotations.length})
-              </h3>
-              <div className="space-y-3">
-                {quotations.map((q) => (
-                  <div
-                    key={q.id}
-                    className="p-3.5 border border-slate-200 rounded-lg text-xs space-y-2"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="font-mono font-semibold text-amber-800">
-                          {q.quoteNumber} · {q.customerCompany}
-                        </div>
-                        <div className="font-bold text-slate-950">{q.vehicleTitle}</div>
-                        <div className="font-mono text-[11px] text-slate-600">
-                          CIF {fmt(q.totalCifUsd)} · Ceiling {fmt(q.authorizedMaxBidUsd)}
-                        </div>
-                      </div>
-                      <span
-                        className={`px-2 py-0.5 text-[10px] font-semibold uppercase rounded ${
-                          q.status === 'approved'
-                            ? 'bg-emerald-100 text-emerald-900'
-                            : q.status === 'declined'
-                              ? 'bg-red-100 text-red-900'
-                              : 'bg-amber-100 text-amber-950'
-                        }`}
-                      >
-                        {q.status}
-                      </span>
-                    </div>
-                    {q.status === 'approved' && (
-                      <button
-                        type="button"
-                        onClick={() => void onConvertQuoteToOrder(q)}
-                        className="w-full py-1.5 text-xs font-semibold text-white bg-slate-950 hover:bg-slate-800 rounded-md cursor-pointer"
-                      >
-                        Convert Approved Quote → Export Order
-                      </button>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
+            )}
           </div>
 
-          {/* Issue New Itemized Quotation Form */}
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const cust =
-                users.find((u) => u.uid === qCustomerId) || customerUsers[0] || null;
-              const port = getPortById(qPortId);
-              await onCreateQuotation({
-                sourcingRequestId: qSourcingId,
-                vehicleId: qVehicleId,
-                vehicleTitle: qTitle,
-                stockCode: qStockCode,
-                customerId: cust?.uid || qCustomerId,
-                customerName: cust?.displayName || 'Registered Dealer',
-                customerCompany: cust?.companyName || 'Overseas Dealer',
-                destinationPortId: port.id,
-                destinationPortName: `${port.name}, ${port.country}`,
-                currency,
-                fobVehicleUsd: Number(qFob),
-                auctionFeeUsd: Number(qAuctionFee),
-                exportDocsUsd: Number(qExportDocs),
-                jevicInspectionUsd: Number(qJevic),
-                seaFreightUsd: Number(qFreight),
-                marineInsuranceUsd: Number(qInsurance),
-                authorizedMaxBidUsd: Number(qMaxBid),
-                notes: qNotes,
-              });
-            }}
-            className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 space-y-4"
-          >
-            <h2 className="text-base font-bold text-slate-950 border-b border-slate-200 pb-3">
-              Issue Itemized CIF Quotation &amp; Max Bid Authorization
-            </h2>
+          {/* Right Controls: Notifications & Dark/Light Theme */}
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setNotificationsOpen((o) => !o)}
+                aria-label="Notifications"
+                className="relative p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <Bell className="w-4 h-4" />
+                {notifications.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold flex items-center justify-center">
+                    {notifications.length}
+                  </span>
+                )}
+              </button>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Target Customer / Dealer
-                </label>
-                <select
-                  value={qCustomerId}
-                  onChange={(e) => setQCustomerId(e.target.value)}
-                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-                >
-                  {customerUsers.map((c) => (
-                    <option key={c.uid} value={c.uid}>
-                      {c.companyName} ({c.displayName})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Destination Port
-                </label>
-                <select
-                  value={qPortId}
-                  onChange={(e) => setQPortId(e.target.value)}
-                  className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-                >
-                  {GLOBAL_PORTS.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.country} — {p.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Vehicle Title *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={qTitle}
-                  onChange={(e) => setQTitle(e.target.value)}
-                  className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Stock / Auction Lot Code *
-                </label>
-                <input
-                  type="text"
-                  required
-                  value={qStockCode}
-                  onChange={(e) => setQStockCode(e.target.value.toUpperCase())}
-                  className="w-full px-3 py-2 text-sm font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-3.5">
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Vehicle FOB (USD)
-                </label>
-                <input
-                  type="number"
-                  value={qFob}
-                  onChange={(e) => setQFob(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Auction Fee (USD)
-                </label>
-                <input
-                  type="number"
-                  value={qAuctionFee}
-                  onChange={(e) => setQAuctionFee(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Export Docs (USD)
-                </label>
-                <input
-                  type="number"
-                  value={qExportDocs}
-                  onChange={(e) => setQExportDocs(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  JEVIC / QISJ (USD)
-                </label>
-                <input
-                  type="number"
-                  value={qJevic}
-                  onChange={(e) => setQJevic(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Sea Freight (USD)
-                </label>
-                <input
-                  type="number"
-                  value={qFreight}
-                  onChange={(e) => setQFreight(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">
-                  Marine Insurance (USD)
-                </label>
-                <input
-                  type="number"
-                  value={qInsurance}
-                  onChange={(e) => setQInsurance(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-
-            <div className="p-4 bg-amber-50 border border-amber-200 rounded-lg grid grid-cols-1 sm:grid-cols-2 gap-4 items-center">
-              <div>
-                <label className="block text-xs font-bold text-amber-950 mb-1">
-                  Authorized Maximum Bid Ceiling (USD) *
-                </label>
-                <input
-                  type="number"
-                  required
-                  value={qMaxBid}
-                  onChange={(e) => setQMaxBid(Number(e.target.value))}
-                  className="w-full px-3 py-2 text-sm font-mono font-bold bg-white border border-amber-400 rounded-lg"
-                />
-              </div>
-              <div className="text-right">
-                <div className="text-xs text-slate-600">Calculated Total CIF</div>
-                <div className="text-xl font-extrabold font-mono text-slate-950">
-                  {fmt(qFob + qAuctionFee + qExportDocs + qJevic + qFreight + qInsurance)}
+              {notificationsOpen && (
+                <div className="absolute right-0 top-full mt-2 w-80 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                    <span className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                      Action Alerts
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setNotificationsOpen(false)}
+                      className="text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                  {notifications.length === 0 ? (
+                    <div className="p-5 text-xs text-slate-500 dark:text-slate-400 text-center">
+                      All caught up — no pending operational alerts.
+                    </div>
+                  ) : (
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {notifications.map((n) => (
+                        <button
+                          key={n.id}
+                          type="button"
+                          onClick={() => {
+                            setActiveSection(n.section);
+                            setNotificationsOpen(false);
+                          }}
+                          className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
+                        >
+                          <div className="text-xs font-bold text-slate-950 dark:text-white">
+                            {n.title}
+                          </div>
+                          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                            {n.detail}
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Quotation Terms &amp; Fixed vs. Estimate Notes
-              </label>
-              <textarea
-                rows={2}
-                value={qNotes}
-                onChange={(e) => setQNotes(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-              />
+              )}
             </div>
 
             <button
-              type="submit"
-              className="px-5 py-2.5 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg cursor-pointer"
+              type="button"
+              onClick={() => setDarkMode((d) => !d)}
+              aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'}
+              title={darkMode ? 'Light mode' : 'Dark mode'}
+              className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
             >
-              Issue Quotation to Customer Portal
+              {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
             </button>
-          </form>
-        </div>
-      )}
-
-      {/* TAB 4: ORDERS & VESSEL LOGISTICS + INTERNAL VS CUSTOMER NOTES */}
-      {activeTab === 'orders' && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <div className="lg:col-span-4 space-y-2.5">
-            {orders.map((ord) => (
-              <button
-                key={ord.id}
-                type="button"
-                onClick={() => selectOrderForEdit(ord)}
-                className={`w-full text-left p-4 rounded-xl border transition-colors cursor-pointer ${
-                  selectedOrder?.id === ord.id
-                    ? 'bg-slate-950 text-white border-slate-950'
-                    : 'bg-white text-slate-900 border-slate-200 hover:border-slate-300'
-                }`}
-              >
-                <div className="text-[11px] font-mono text-amber-500 font-semibold">
-                  {ord.orderNumber} · {ord.trackingCode}
-                </div>
-                <div className="text-sm font-bold mt-0.5">{ord.vehicleTitle}</div>
-                <div
-                  className={`text-xs mt-0.5 ${
-                    selectedOrder?.id === ord.id ? 'text-slate-300' : 'text-slate-500'
-                  }`}
-                >
-                  {ord.customerCompany} · {TRADE_MILESTONE_META[ord.milestone]?.shortLabel}
-                </div>
-              </button>
-            ))}
           </div>
+        </header>
 
-          <div className="lg:col-span-8 space-y-6">
-            {selectedOrder && (
-              <>
-                <form
-                  onSubmit={async (e) => {
-                    e.preventDefault();
-                    await onUpdateOrderLogistics({
-                      order: selectedOrder,
-                      milestone: editMilestone,
-                      vesselName: editVessel,
-                      voyageNumber: editVoyage,
-                      blNumber: editBl,
-                      etdDate: editEtd,
-                      etaDate: editEta,
-                      scheduleIsEstimate: editEstimate,
-                    });
-                  }}
-                  className="bg-white border border-slate-200 rounded-xl p-6 space-y-4"
-                >
-                  <div className="border-b border-slate-200 pb-3 flex items-center justify-between">
-                    <div>
-                      <h2 className="text-base font-bold text-slate-950">
-                        {selectedOrder.orderNumber} — 14-Stage Milestone &amp; Vessel Schedule
-                      </h2>
-                      <p className="text-xs text-slate-500">
-                        {selectedOrder.customerCompany} · Max Bid Ceiling{' '}
-                        {fmt(selectedOrder.authorizedMaxBidUsd)} · Placed Bid{' '}
-                        {fmt(selectedOrder.placedBidUsd)}
-                      </p>
-                    </div>
+        {/* Active Module Content */}
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1600px] w-full mx-auto">
+          {/* 1. EXECUTIVE DASHBOARD */}
+          {activeSection === 'dashboard' && (
+            <ExecutiveDashboardPanel
+              currency={currency}
+              fxRates={fxRates}
+              vehicles={vehicles}
+              users={users}
+              sourcingRequests={sourcingRequests}
+              quotations={quotations}
+              orders={orders}
+              inquiries={inquiries}
+              financeRecords={financeRecords}
+              leaveRequests={hrLeaveRequests}
+              teamTasks={teamTasks}
+              onNavigateSection={(sec) => setActiveSection(sec as ConsoleSection)}
+              onGenerateDailyAiReport={() => {
+                setAiPreset({
+                  tool: 'daily_report',
+                  prompt:
+                    'Generate today’s executive Daily Business Report covering revenue, pending quotations, shipping pipeline, and top 3 priorities.',
+                });
+                setActiveSection('ai');
+              }}
+              onDownloadBackup={handleDownloadFullBackup}
+            />
+          )}
+
+          {/* 2. CRM & LEADS */}
+          {activeSection === 'crm' && (
+            <CrmSalesPanel
+              mode="crm"
+              currency={currency}
+              fxRates={fxRates}
+              users={users}
+              inquiries={inquiries}
+              sourcingRequests={sourcingRequests}
+              quotations={quotations}
+              orders={orders}
+              vehicles={vehicles}
+              salesTargets={salesTargets}
+              canCreate={can('crm', 'create')}
+              canEdit={can('crm', 'edit')}
+              canDelete={can('crm', 'delete')}
+              canExport={can('crm', 'export')}
+              onUpdateInquiry={onUpdateInquiry}
+              onCreateQuotation={onCreateQuotation}
+              onConvertQuoteToOrder={onConvertQuoteToOrder}
+              onSaveSalesTarget={onSaveSalesTarget}
+              onDeleteSalesTarget={onDeleteSalesTarget}
+              onOpenAiFollowup={(prompt) => {
+                setAiPreset({ tool: 'sales_followup', prompt });
+                setActiveSection('ai');
+              }}
+            />
+          )}
+
+          {/* 3. SALES DEPARTMENT */}
+          {activeSection === 'sales' && (
+            <CrmSalesPanel
+              mode="sales"
+              currency={currency}
+              fxRates={fxRates}
+              users={users}
+              inquiries={inquiries}
+              sourcingRequests={sourcingRequests}
+              quotations={quotations}
+              orders={orders}
+              vehicles={vehicles}
+              salesTargets={salesTargets}
+              canCreate={can('sales', 'create')}
+              canEdit={can('sales', 'edit')}
+              canDelete={can('sales', 'delete')}
+              canExport={can('sales', 'export')}
+              onUpdateInquiry={onUpdateInquiry}
+              onCreateQuotation={onCreateQuotation}
+              onConvertQuoteToOrder={onConvertQuoteToOrder}
+              onSaveSalesTarget={onSaveSalesTarget}
+              onDeleteSalesTarget={onDeleteSalesTarget}
+              onOpenAiFollowup={(prompt) => {
+                setAiPreset({ tool: 'sales_followup', prompt });
+                setActiveSection('ai');
+              }}
+            />
+          )}
+
+          {/* 4. INVENTORY MANAGEMENT */}
+          {activeSection === 'inventory' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-950 dark:text-white tracking-tight">
+                    Inventory Management
+                  </h2>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                    Manage yard stock, auction listings, partner inventory, pricing, and availability.
+                  </p>
+                </div>
+                {can('inventory', 'create') && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEditingVehicle(null);
+                      setIsImportMode(false);
+                      setVehicleModalOpen(true);
+                    }}
+                    className="inline-flex items-center gap-2 px-4 py-2.5 text-sm font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    Add Vehicle
+                  </button>
+                )}
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="relative flex-1 min-w-[220px] max-w-md">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <input
+                    type="text"
+                    value={invSearch}
+                    onChange={(e) => setInvSearch(e.target.value)}
+                    placeholder="Filter by stock code, make, model, chassis..."
+                    className="w-full pl-10 pr-4 py-2 text-sm bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-lg p-1">
+                  {(['ALL', 'available', 'reserved', 'sold', 'archived'] as const).map((st) => (
+                    <button
+                      key={st}
+                      type="button"
+                      onClick={() => setInvStatusFilter(st)}
+                      className={`px-3 py-1.5 text-xs font-semibold rounded-md capitalize cursor-pointer ${
+                        invStatusFilter === st
+                          ? 'bg-slate-950 dark:bg-amber-500 text-white dark:text-slate-950'
+                          : 'text-slate-600 dark:text-slate-300'
+                      }`}
+                    >
+                      {st === 'ALL' ? `All (${vehicles.length})` : st}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-xs uppercase text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th className="px-4 py-3">Vehicle</th>
+                      <th className="px-4 py-3">Type &amp; Port</th>
+                      <th className="px-4 py-3">Specs</th>
+                      <th className="px-4 py-3">FOB Price</th>
+                      <th className="px-4 py-3">Status</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {filteredVehicles.map((v) => (
+                      <tr key={v.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            {v.images[0] && (
+                              <img
+                                src={v.images[0]}
+                                alt={v.model}
+                                className="w-14 h-10 object-cover rounded-md border border-slate-200 dark:border-slate-700 shrink-0"
+                              />
+                            )}
+                            <div>
+                              <div className="font-mono text-xs font-bold text-amber-700 dark:text-amber-400">
+                                {v.stockCode}
+                              </div>
+                              <div className="font-bold text-slate-950 dark:text-white">
+                                {v.year} {v.make} {v.model}
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-xs text-slate-600 dark:text-slate-300">
+                          <div className="capitalize">{v.listingType.replace('_', ' ')}</div>
+                          <div className="text-slate-400">{v.originPort}</div>
+                        </td>
+                        <td className="px-4 py-3 text-xs font-mono text-slate-600 dark:text-slate-300">
+                          <div>{v.mileageKm.toLocaleString()} km</div>
+                          <div className="text-slate-400">
+                            Grade {v.auctionReport.exteriorGrade} · {v.chassisCode}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 font-mono font-bold text-slate-950 dark:text-white">
+                          {fmt(v.fobPriceUsd)}
+                        </td>
+                        <td className="px-4 py-3">
+                          <span
+                            className={`px-2 py-0.5 text-xs font-semibold uppercase rounded ${
+                              v.status === 'available'
+                                ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300'
+                                : v.status === 'reserved'
+                                  ? 'bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-300'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                            }`}
+                          >
+                            {v.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="inline-flex items-center gap-1.5">
+                            {can('inventory', 'edit') && (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setEditingVehicle(v);
+                                    setIsImportMode(false);
+                                    setVehicleModalOpen(true);
+                                  }}
+                                  title="Edit vehicle"
+                                  className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md cursor-pointer"
+                                >
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void onArchiveVehicle(v)}
+                                  title={v.status === 'archived' ? 'Restore vehicle' : 'Archive vehicle'}
+                                  className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md cursor-pointer"
+                                >
+                                  <Archive className="w-4 h-4" />
+                                </button>
+                              </>
+                            )}
+                            {can('inventory', 'delete') &&
+                              (confirmDeleteVehId === v.id ? (
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    await onDeleteVehicle(v.id);
+                                    setConfirmDeleteVehId(null);
+                                  }}
+                                  className="px-2 py-1 text-xs font-bold text-white bg-red-600 rounded cursor-pointer"
+                                >
+                                  Confirm
+                                </button>
+                              ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setConfirmDeleteVehId(v.id)}
+                                  title="Delete vehicle"
+                                  className="p-1.5 text-slate-400 hover:text-red-600 rounded-md cursor-pointer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              ))}
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* 5. AUCTION MANAGEMENT */}
+          {activeSection === 'auctions' && (
+            <div className="space-y-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-2xl font-bold text-slate-950 dark:text-white tracking-tight">
+                    Auction Management
+                  </h2>
+                  <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                    Process buyer sourcing requests, enforce Max Bid Ceiling approvals, and import
+                    live Japanese auction lots.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {[
+                    { id: 'sourcing', label: `Sourcing Requests (${sourcingRequests.length})` },
+                    { id: 'bidding', label: 'Bid Approvals & Guard' },
+                    { id: 'import', label: 'Live Auction Import' },
+                  ].map((t) => (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => setAuctionSubTab(t.id as 'import' | 'sourcing' | 'bidding')}
+                      className={`px-3.5 py-2 text-sm font-semibold rounded-lg cursor-pointer ${
+                        auctionSubTab === t.id
+                          ? 'bg-slate-950 dark:bg-amber-500 text-white dark:text-slate-950'
+                          : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-800'
+                      }`}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {auctionSubTab === 'import' && (
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+                  <StaffAuctionImportPanel
+                    currency={currency}
+                    settings={settings}
+                    onImportLot={(lot) => {
+                      setEditingVehicle(lot);
+                      setIsImportMode(true);
+                      setVehicleModalOpen(true);
+                    }}
+                  />
+                </div>
+              )}
+
+              {auctionSubTab === 'bidding' && (
+                <div className="max-w-2xl bg-slate-950 text-white rounded-2xl p-6 space-y-5 border border-slate-800">
+                  <div className="flex items-center gap-2 text-xs font-mono text-amber-400">
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>SERVER-ENFORCED MAX BID CEILING GUARD</span>
                   </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  <p className="text-sm text-slate-300 leading-relaxed">
+                    Submit a live Japanese auction bid for an approved export order. Any bid above
+                    the customer&apos;s authorized ceiling is blocked automatically and logged to
+                    the immutable Audit Trail.
+                  </p>
+                  <div className="space-y-4">
                     <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">
-                        Current Order Milestone (14 Stages)
-                      </label>
+                      <label className="block text-xs text-slate-400 mb-1">Target Export Order</label>
                       <select
-                        value={editMilestone}
-                        onChange={(e) =>
-                          setEditMilestone(e.target.value as TradeOrderMilestone)
-                        }
-                        className="w-full px-3 py-2 text-xs font-semibold border border-slate-300 rounded-lg"
+                        value={bidOrderId}
+                        onChange={(e) => {
+                          setBidOrderId(e.target.value);
+                          setBidGuardResult(null);
+                        }}
+                        className="w-full px-3.5 py-2.5 text-sm bg-slate-900 border border-slate-700 rounded-lg text-white"
                       >
-                        {TRADE_MILESTONE_ORDER.map((m, idx) => (
-                          <option key={m} value={m}>
-                            {String(idx + 1).padStart(2, '0')}. {TRADE_MILESTONE_META[m].label}
+                        {orders.map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.orderNumber} — {o.vehicleStockCode} (Authorized Ceiling: $
+                            {o.authorizedMaxBidUsd.toLocaleString()})
                           </option>
                         ))}
                       </select>
                     </div>
                     <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">
-                        Vessel Name
+                      <label className="block text-xs text-slate-400 mb-1">
+                        Proposed Auction Bid (USD)
                       </label>
                       <input
-                        type="text"
-                        value={editVessel}
-                        onChange={(e) => setEditVessel(e.target.value)}
-                        placeholder="MV HOEGH TRAVELLER"
-                        className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
+                        type="number"
+                        min={500}
+                        step={100}
+                        value={bidAmountUsd}
+                        onChange={(e) => setBidAmountUsd(Number(e.target.value))}
+                        className="w-full px-3.5 py-2.5 text-base font-mono bg-slate-900 border border-slate-700 rounded-lg text-white"
                       />
                     </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">
-                        Voyage Number
-                      </label>
-                      <input
-                        type="text"
-                        value={editVoyage}
-                        onChange={(e) => setEditVoyage(e.target.value)}
-                        placeholder="V.048-EA"
-                        className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">
-                        Bill of Lading (B/L) #
-                      </label>
-                      <input
-                        type="text"
-                        value={editBl}
-                        onChange={(e) => setEditBl(e.target.value)}
-                        placeholder="HLJP-YOK-268841"
-                        className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">
-                        ETD Japan
-                      </label>
-                      <input
-                        type="date"
-                        value={editEtd}
-                        onChange={(e) => setEditEtd(e.target.value)}
-                        className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-medium text-slate-700 mb-1">
-                        ETA Destination Port
-                      </label>
-                      <input
-                        type="date"
-                        value={editEta}
-                        onChange={(e) => setEditEta(e.target.value)}
-                        className="w-full px-3 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                  </div>
-
-                  <label className="inline-flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={editEstimate}
-                      onChange={(e) => setEditEstimate(e.target.checked)}
-                      className="accent-amber-600"
-                    />
-                    Mark vessel dates as Estimated Schedule on customer &amp; public tracker
-                  </label>
-
-                  <div>
                     <button
-                      type="submit"
-                      className="px-5 py-2.5 text-xs font-semibold text-white bg-slate-950 hover:bg-slate-800 rounded-lg cursor-pointer"
+                      type="button"
+                      disabled={!can('auctions', 'approve')}
+                      onClick={async () => {
+                        const target = orders.find((o) => o.id === bidOrderId);
+                        if (!target) return;
+                        const res = await onPlaceAuctionBid(target, bidAmountUsd);
+                        setBidGuardResult({
+                          ok: res.ok,
+                          text: res.ok
+                            ? `Bid of $${bidAmountUsd.toLocaleString()} USD approved within $${target.authorizedMaxBidUsd.toLocaleString()} ceiling and logged.`
+                            : res.error || 'Bid blocked.',
+                        });
+                      }}
+                      className="w-full py-2.5 px-4 text-sm font-semibold text-slate-950 bg-amber-500 hover:bg-amber-400 rounded-lg cursor-pointer disabled:opacity-50"
                     >
-                      Save Milestone &amp; Sync Public Tracker
+                      Validate &amp; Submit Auction Bid
                     </button>
-                  </div>
-                </form>
-
-                {/* Order Messages: Customer-Visible vs Confidential Internal Staff Notes */}
-                <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-                  <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-                    <h3 className="text-sm font-bold text-slate-950 flex items-center gap-2">
-                      <MessageSquare className="w-4 h-4 text-amber-600" />
-                      Order Thread (Customer Messages + Confidential Internal Staff Notes)
-                    </h3>
-                  </div>
-
-                  <div className="space-y-2.5 max-h-64 overflow-y-auto">
-                    {messages
-                      .filter((m) => m.orderId === selectedOrder.id)
-                      .map((m) => (
-                        <div
-                          key={m.id}
-                          className={`p-3 rounded-lg text-xs border ${
-                            m.isInternalStaffOnly
-                              ? 'bg-amber-50 border-amber-300 text-amber-950'
-                              : 'bg-slate-50 border-slate-200 text-slate-900'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between text-[11px] mb-1">
-                            <span className="font-semibold">
-                              {m.senderName} ({m.senderRole})
-                            </span>
-                            <span
-                              className={`px-1.5 py-0.5 rounded font-mono text-[10px] font-bold ${
-                                m.isInternalStaffOnly
-                                  ? 'bg-amber-200 text-amber-950'
-                                  : 'bg-emerald-100 text-emerald-900'
-                              }`}
-                            >
-                              {m.isInternalStaffOnly
-                                ? 'INTERNAL STAFF ONLY (HIDDEN FROM CUSTOMER)'
-                                : 'CUSTOMER-VISIBLE'}
-                            </span>
-                          </div>
-                          <p>{m.body}</p>
-                        </div>
-                      ))}
-                  </div>
-
-                  <form
-                    onSubmit={async (e) => {
-                      e.preventDefault();
-                      if (!staffMsgBody.trim()) return;
-                      await onPostOrderMessage({
-                        order: selectedOrder,
-                        body: staffMsgBody.trim(),
-                        isInternalStaffOnly: staffMsgInternal,
-                      });
-                      setStaffMsgBody('');
-                    }}
-                    className="space-y-2.5 pt-2 border-t border-slate-100"
-                  >
-                    <div className="flex items-center gap-4 text-xs">
-                      <label className="inline-flex items-center gap-1.5 cursor-pointer font-medium text-amber-900">
-                        <input
-                          type="radio"
-                          checked={staffMsgInternal}
-                          onChange={() => setStaffMsgInternal(true)}
-                          className="accent-amber-600"
-                        />
-                        Confidential Internal Staff Note (Hidden from Customer)
-                      </label>
-                      <label className="inline-flex items-center gap-1.5 cursor-pointer font-medium text-emerald-900">
-                        <input
-                          type="radio"
-                          checked={!staffMsgInternal}
-                          onChange={() => setStaffMsgInternal(false)}
-                          className="accent-emerald-700"
-                        />
-                        Customer-Visible Update
-                      </label>
-                    </div>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={staffMsgBody}
-                        onChange={(e) => setStaffMsgBody(e.target.value)}
-                        placeholder={
-                          staffMsgInternal
-                            ? 'Add confidential buy-rate, yard cost, or internal logistics note...'
-                            : 'Write update visible to customer in their Dealer Portal...'
-                        }
-                        className="flex-1 px-3 py-2 text-xs border border-slate-300 rounded-lg"
-                      />
-                      <button
-                        type="submit"
-                        className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-slate-950 rounded-lg cursor-pointer"
+                    {bidGuardResult && (
+                      <div
+                        className={`p-3.5 rounded-lg text-xs flex items-start gap-2 ${
+                          bidGuardResult.ok
+                            ? 'bg-emerald-950 border border-emerald-700 text-emerald-200'
+                            : 'bg-red-950 border border-red-700 text-red-200'
+                        }`}
                       >
-                        <Send className="w-3.5 h-3.5" />
-                        Post
-                      </button>
-                    </div>
-                  </form>
+                        {bidGuardResult.ok ? (
+                          <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-400" />
+                        ) : (
+                          <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5 text-red-400" />
+                        )}
+                        <span>{bidGuardResult.text}</span>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+              )}
 
-      {/* TAB 5: INVENTORY MANAGER */}
-      {activeTab === 'inventory' && canInventory && (
-        <div className="space-y-6">
-          {showAuctionImporter && (
-            <StaffAuctionImportPanel
+              {auctionSubTab === 'sourcing' && (
+                <div className="space-y-4">
+                  {sourcingRequests.length === 0 ? (
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center text-sm text-slate-500">
+                      No buyer sourcing requests yet.
+                    </div>
+                  ) : (
+                    sourcingRequests.map((req) => (
+                      <div
+                        key={req.id}
+                        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
+                          <div>
+                            <div className="text-xs font-mono text-amber-700 dark:text-amber-400 font-semibold">
+                              {req.requestCode} · {req.customerCompany} ({req.customerName})
+                            </div>
+                            <h3 className="text-base font-bold text-slate-950 dark:text-white mt-0.5">
+                              {req.yearMin}–{req.yearMax} {req.make} {req.model} (Qty {req.quantity})
+                            </h3>
+                            <div className="text-xs text-slate-600 dark:text-slate-400 mt-1">
+                              Budget Ceiling: <strong className="font-mono">{fmt(req.maxBudgetUsd)}</strong> ·
+                              Max {req.mileageMaxKm.toLocaleString()} km · Grade {req.gradePref} ·
+                              Port: {getPortById(req.destinationPortId).name}
+                            </div>
+                          </div>
+                          <span className="px-2.5 py-1 text-xs font-semibold uppercase rounded bg-slate-100 dark:bg-slate-800 text-slate-800 dark:text-slate-200">
+                            {req.status.replace('_', ' ')}
+                          </span>
+                        </div>
+
+                        {req.options.length > 0 && (
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {req.options.map((o) => (
+                              <div
+                                key={o.id}
+                                className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-xs space-y-1"
+                              >
+                                <div className="flex justify-between font-semibold text-slate-950 dark:text-white">
+                                  <span>{o.title}</span>
+                                  <span className="font-mono text-amber-700 dark:text-amber-400">
+                                    {fmt(o.estFobUsd)}
+                                  </span>
+                                </div>
+                                <div className="font-mono text-[11px] text-slate-500 dark:text-slate-400">
+                                  {o.auctionHouse} Lot #{o.lotNumber} · Grade {o.grade} ·{' '}
+                                  {o.mileageKm.toLocaleString()} km
+                                </div>
+                                <p className="text-[11px] text-slate-600 dark:text-slate-300">
+                                  {o.translatedNotes}
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+
+                        {can('auctions', 'edit') &&
+                          (optReqId === req.id ? (
+                            <form
+                              onSubmit={async (e) => {
+                                e.preventDefault();
+                                await onAttachSourcingOption(req, {
+                                  id: `opt-${Date.now()}`,
+                                  title: optTitle,
+                                  auctionHouse: optHouse,
+                                  lotNumber: optLot,
+                                  grade: optGrade,
+                                  mileageKm: Number(optMileage),
+                                  estFobUsd: Number(optFob),
+                                  translatedNotes: optNotes,
+                                });
+                                setOptReqId('');
+                                setOptTitle('');
+                                setOptLot('');
+                                setOptNotes('');
+                              }}
+                              className="p-4 bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-lg space-y-3"
+                            >
+                              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                                <input
+                                  type="text"
+                                  required
+                                  value={optTitle}
+                                  onChange={(e) => setOptTitle(e.target.value)}
+                                  placeholder="Vehicle Title"
+                                  className="px-3 py-2 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md"
+                                />
+                                <input
+                                  type="text"
+                                  required
+                                  value={optHouse}
+                                  onChange={(e) => setOptHouse(e.target.value)}
+                                  placeholder="Auction House"
+                                  className="px-3 py-2 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md"
+                                />
+                                <input
+                                  type="text"
+                                  required
+                                  value={optLot}
+                                  onChange={(e) => setOptLot(e.target.value)}
+                                  placeholder="Lot Number"
+                                  className="px-3 py-2 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md"
+                                />
+                                <input
+                                  type="text"
+                                  value={optGrade}
+                                  onChange={(e) => setOptGrade(e.target.value)}
+                                  placeholder="Grade (4.5 / A)"
+                                  className="px-3 py-2 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md"
+                                />
+                                <input
+                                  type="number"
+                                  value={optMileage}
+                                  onChange={(e) => setOptMileage(Number(e.target.value))}
+                                  placeholder="Mileage km"
+                                  className="px-3 py-2 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md"
+                                />
+                                <input
+                                  type="number"
+                                  value={optFob}
+                                  onChange={(e) => setOptFob(Number(e.target.value))}
+                                  placeholder="Est FOB USD"
+                                  className="px-3 py-2 text-xs font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md"
+                                />
+                              </div>
+                              <textarea
+                                rows={2}
+                                required
+                                value={optNotes}
+                                onChange={(e) => setOptNotes(e.target.value)}
+                                placeholder="Translated Japanese auction inspector sheet notes..."
+                                className="w-full px-3 py-2 text-xs bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-md"
+                              />
+                              <div className="flex gap-2">
+                                <button
+                                  type="submit"
+                                  className="px-4 py-2 text-xs font-semibold text-white bg-slate-950 dark:bg-amber-500 dark:text-slate-950 rounded-md cursor-pointer"
+                                >
+                                  Send Option to Buyer
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => setOptReqId('')}
+                                  className="px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-md cursor-pointer"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setOptReqId(req.id)}
+                              className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-700 dark:text-amber-400 hover:underline cursor-pointer"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              Attach Shortlisted Auction Option
+                            </button>
+                          ))}
+                      </div>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* 6. ORDERS MANAGEMENT */}
+          {activeSection === 'orders' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-950 dark:text-white tracking-tight">
+                  Export Orders
+                </h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                  Track every export order across all 14 milestones and exchange customer or
+                  internal staff notes.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <div className="lg:col-span-4 space-y-2.5">
+                  {orders.map((ord) => (
+                    <button
+                      key={ord.id}
+                      type="button"
+                      onClick={() => selectOrderForEdit(ord)}
+                      className={`w-full text-left p-4 rounded-xl border transition-colors cursor-pointer ${
+                        selectedOrder?.id === ord.id
+                          ? 'bg-slate-950 dark:bg-amber-500 text-white dark:text-slate-950 border-slate-950 dark:border-amber-500'
+                          : 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white border-slate-200 dark:border-slate-800 hover:border-slate-300'
+                      }`}
+                    >
+                      <div
+                        className={`text-xs font-mono font-bold ${
+                          selectedOrder?.id === ord.id
+                            ? 'text-amber-400 dark:text-slate-900'
+                            : 'text-amber-700 dark:text-amber-400'
+                        }`}
+                      >
+                        {ord.orderNumber} · {ord.trackingCode}
+                      </div>
+                      <div className="text-sm font-bold mt-0.5">{ord.vehicleTitle}</div>
+                      <div className="text-xs opacity-75 mt-0.5">
+                        {ord.customerCompany} · {TRADE_MILESTONE_META[ord.milestone]?.shortLabel}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+
+                <div className="lg:col-span-8 space-y-6">
+                  {selectedOrder ? (
+                    <>
+                      <form
+                        onSubmit={async (e) => {
+                          e.preventDefault();
+                          await onUpdateOrderLogistics({
+                            order: selectedOrder,
+                            milestone: editMilestone,
+                            vesselName: editVessel,
+                            voyageNumber: editVoyage,
+                            blNumber: editBl,
+                            etdDate: editEtd,
+                            etaDate: editEta,
+                            scheduleIsEstimate: editEstimate,
+                          });
+                        }}
+                        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+                          <div>
+                            <h3 className="text-base font-bold text-slate-950 dark:text-white">
+                              {selectedOrder.orderNumber} — {selectedOrder.vehicleTitle}
+                            </h3>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">
+                              {selectedOrder.customerCompany} · {selectedOrder.destinationPortName} ·
+                              CIF {fmt(selectedOrder.totalCifUsd)}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                          <div className="sm:col-span-2">
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              Order Milestone (14-Stage Pipeline)
+                            </label>
+                            <select
+                              value={editMilestone}
+                              onChange={(e) =>
+                                setEditMilestone(e.target.value as TradeOrderMilestone)
+                              }
+                              className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                            >
+                              {TRADE_MILESTONE_ORDER.map((m, idx) => (
+                                <option key={m} value={m}>
+                                  {idx + 1}. {TRADE_MILESTONE_META[m].label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              Vessel Name
+                            </label>
+                            <input
+                              type="text"
+                              value={editVessel}
+                              onChange={(e) => setEditVessel(e.target.value)}
+                              className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              Bill of Lading (B/L) #
+                            </label>
+                            <input
+                              type="text"
+                              value={editBl}
+                              onChange={(e) => setEditBl(e.target.value)}
+                              className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              ETD Date
+                            </label>
+                            <input
+                              type="date"
+                              value={editEtd}
+                              onChange={(e) => setEditEtd(e.target.value)}
+                              className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              ETA Date
+                            </label>
+                            <input
+                              type="date"
+                              value={editEta}
+                              onChange={(e) => setEditEta(e.target.value)}
+                              className="w-full px-3 py-2 text-sm font-mono bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+
+                        {can('orders', 'edit') && (
+                          <button
+                            type="submit"
+                            className="px-5 py-2.5 text-sm font-semibold text-white bg-slate-950 dark:bg-amber-500 dark:text-slate-950 rounded-lg cursor-pointer"
+                          >
+                            Save Order &amp; Sync Public Tracker
+                          </button>
+                        )}
+                      </form>
+
+                      {/* Order Messages */}
+                      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 space-y-4">
+                        <h3 className="text-base font-bold text-slate-950 dark:text-white flex items-center gap-2">
+                          <MessageSquare className="w-4 h-4 text-amber-600" />
+                          Order Communication Thread
+                        </h3>
+                        <div className="space-y-2.5 max-h-64 overflow-y-auto">
+                          {messages
+                            .filter((m) => m.orderId === selectedOrder.id)
+                            .map((m) => (
+                              <div
+                                key={m.id}
+                                className={`p-3 rounded-lg text-xs border ${
+                                  m.isInternalStaffOnly
+                                    ? 'bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800'
+                                    : 'bg-slate-50 dark:bg-slate-800/60 border-slate-200 dark:border-slate-700'
+                                }`}
+                              >
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="font-bold text-slate-900 dark:text-white">
+                                    {m.senderName} ({m.senderRole})
+                                  </span>
+                                  <span className="text-[10px] font-bold uppercase text-amber-700 dark:text-amber-400">
+                                    {m.isInternalStaffOnly ? 'Internal Only' : 'Customer Visible'}
+                                  </span>
+                                </div>
+                                <p className="text-slate-700 dark:text-slate-200">{m.body}</p>
+                              </div>
+                            ))}
+                        </div>
+
+                        <form
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            if (!staffMsgBody.trim()) return;
+                            await onPostOrderMessage({
+                              order: selectedOrder,
+                              body: staffMsgBody.trim(),
+                              isInternalStaffOnly: staffMsgInternal,
+                            });
+                            setStaffMsgBody('');
+                          }}
+                          className="space-y-2.5"
+                        >
+                          <div className="flex items-center gap-4 text-xs">
+                            <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={staffMsgInternal}
+                                onChange={(e) => setStaffMsgInternal(e.target.checked)}
+                                className="accent-amber-600"
+                              />
+                              <span className="font-semibold text-slate-700 dark:text-slate-300">
+                                Internal Staff Note (Hidden from Buyer)
+                              </span>
+                            </label>
+                          </div>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={staffMsgBody}
+                              onChange={(e) => setStaffMsgBody(e.target.value)}
+                              placeholder="Post an order update or internal logistics note..."
+                              className="flex-1 px-3.5 py-2 text-sm bg-slate-50 dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                            />
+                            <button
+                              type="submit"
+                              className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-semibold text-white bg-slate-950 dark:bg-amber-500 dark:text-slate-950 rounded-lg cursor-pointer"
+                            >
+                              <Send className="w-4 h-4" />
+                              Post
+                            </button>
+                          </div>
+                        </form>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-10 text-center text-sm text-slate-500">
+                      No export orders recorded yet.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 7. OPERATIONS & LOGISTICS */}
+          {activeSection === 'logistics' && (
+            <div className="space-y-6">
+              <div>
+                <h2 className="text-2xl font-bold text-slate-950 dark:text-white tracking-tight">
+                  Operations &amp; Logistics Desk
+                </h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                  Monitor yard inspections, export certificates, vessel schedules, B/L numbers, and
+                  port arrivals.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                {[
+                  {
+                    label: 'In Yard / Inspection',
+                    count: orders.filter((o) =>
+                      ['vehicle_in_yard', 'export_docs_ready'].includes(o.milestone)
+                    ).length,
+                  },
+                  {
+                    label: 'Vessel Booked',
+                    count: orders.filter((o) => o.milestone === 'shipment_booked').length,
+                  },
+                  {
+                    label: 'On Water (Shipped)',
+                    count: orders.filter((o) => o.milestone === 'shipped').length,
+                  },
+                  {
+                    label: 'Arrived / Delivered',
+                    count: orders.filter((o) =>
+                      ['arrived_port', 'completed'].includes(o.milestone)
+                    ).length,
+                  },
+                ].map((stat) => (
+                  <div
+                    key={stat.label}
+                    className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-4"
+                  >
+                    <div className="text-xs font-medium text-slate-500 dark:text-slate-400">
+                      {stat.label}
+                    </div>
+                    <div className="text-2xl font-extrabold font-mono text-slate-950 dark:text-white mt-1">
+                      {stat.count}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-x-auto">
+                <table className="w-full text-left text-sm">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-xs uppercase text-slate-500 dark:text-slate-400">
+                    <tr>
+                      <th className="px-4 py-3">Order &amp; Vehicle</th>
+                      <th className="px-4 py-3">Destination Port</th>
+                      <th className="px-4 py-3">Vessel &amp; Voyage</th>
+                      <th className="px-4 py-3">B/L Number</th>
+                      <th className="px-4 py-3">ETD / ETA</th>
+                      <th className="px-4 py-3">Stage</th>
+                      <th className="px-4 py-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
+                    {orders.map((o) => (
+                      <tr key={o.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40">
+                        <td className="px-4 py-3.5">
+                          <div className="font-mono text-xs font-bold text-amber-700 dark:text-amber-400">
+                            {o.orderNumber}
+                          </div>
+                          <div className="font-semibold text-slate-950 dark:text-white">
+                            {o.vehicleTitle}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3.5 text-xs text-slate-600 dark:text-slate-300">
+                          <div>{o.destinationPortName}</div>
+                          <div className="uppercase text-slate-400">{o.shippingMethod}</div>
+                        </td>
+                        <td className="px-4 py-3.5 text-xs text-slate-700 dark:text-slate-300">
+                          <div>{o.vesselName || 'Pending Booking'}</div>
+                          <div className="font-mono text-slate-400">{o.voyageNumber || '—'}</div>
+                        </td>
+                        <td className="px-4 py-3.5 font-mono text-xs text-slate-700 dark:text-slate-300">
+                          {o.blNumber || 'Pending'}
+                        </td>
+                        <td className="px-4 py-3.5 font-mono text-xs text-slate-600 dark:text-slate-300">
+                          <div>ETD: {o.etdDate || 'TBD'}</div>
+                          <div>ETA: {o.etaDate || 'TBD'}</div>
+                        </td>
+                        <td className="px-4 py-3.5">
+                          <span className="px-2 py-0.5 text-xs font-semibold rounded bg-amber-100 dark:bg-amber-950 text-amber-900 dark:text-amber-300">
+                            {TRADE_MILESTONE_META[o.milestone]?.shortLabel}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3.5 text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              selectOrderForEdit(o);
+                              setActiveSection('orders');
+                            }}
+                            className="px-3 py-1.5 text-xs font-semibold text-slate-900 dark:text-white bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 rounded-lg cursor-pointer"
+                          >
+                            Update Vessel
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* 8. ACCOUNTS & FINANCE */}
+          {activeSection === 'accounts' && (
+            <AccountsFinancePanel
               currency={currency}
-              settings={settings}
-              onImportLot={(lotVehicle) => {
-                setEditingVehicle(lotVehicle);
-                setIsImportMode(true);
-                setVehicleModalOpen(true);
-              }}
+              fxRates={fxRates}
+              staffProfile={staffProfile}
+              orders={orders}
+              financeRecords={financeRecords}
+              canCreate={can('accounts', 'create')}
+              canEdit={can('accounts', 'edit')}
+              canDelete={can('accounts', 'delete')}
+              canExport={can('accounts', 'export')}
+              onCreateRecord={onCreateFinanceRecord}
+              onUpdateStatus={onUpdateFinanceStatus}
+              onDeleteRecord={onDeleteFinanceRecord}
             />
           )}
 
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-base font-bold text-slate-950">
-                Firestore Export Stock &amp; Imported Auction Listings ({vehicles.length})
-              </h2>
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAuctionImporter((p) => !p)}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-900 bg-white border border-slate-300 hover:border-amber-600 rounded-lg cursor-pointer"
-                >
-                  <Gavel className="w-3.5 h-3.5 text-amber-600" />
-                  {showAuctionImporter ? 'Hide auc.auziotraders.com Importer' : 'Import from auc.auziotraders.com'}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setEditingVehicle(null);
-                    setIsImportMode(false);
-                    setVehicleModalOpen(true);
-                  }}
-                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg cursor-pointer"
-                >
-                  <Plus className="w-4 h-4" />
-                  Add Vehicle
-                </button>
-              </div>
-            </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                  <th className="py-3 px-4">Stock ID</th>
-                  <th className="py-3 px-4">Vehicle</th>
-                  <th className="py-3 px-4">Listing Type</th>
-                  <th className="py-3 px-4 text-right">FOB</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-200">
-                {vehicles.map((v) => (
-                  <tr key={v.id} className="hover:bg-slate-50">
-                    <td className="py-3 px-4 font-mono font-semibold text-slate-950">
-                      {v.stockCode}
-                    </td>
-                    <td className="py-3 px-4">
-                      <div className="font-semibold text-slate-950">
-                        {v.year} {v.make} {v.model}
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        {v.chassisCode} · Grade {v.auctionReport.exteriorGrade}/
-                        {v.auctionReport.interiorGrade}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 text-slate-700">{v.listingType}</td>
-                    <td className="py-3 px-4 text-right font-mono font-semibold">
-                      {fmt(v.fobPriceUsd)}
-                    </td>
-                    <td className="py-3 px-4">
-                      <span className="px-2 py-0.5 text-[10px] font-semibold uppercase bg-slate-100 rounded">
-                        {v.status}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEditingVehicle(v);
-                          setIsImportMode(false);
-                          setVehicleModalOpen(true);
-                        }}
-                        className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded cursor-pointer"
-                      >
-                        <Edit3 className="w-3 h-3" />
-                        Edit
-                      </button>
-                      {v.status !== 'archived' && (
-                        <button
-                          type="button"
-                          onClick={() => void onArchiveVehicle(v)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-amber-800 bg-amber-50 hover:bg-amber-100 rounded cursor-pointer"
-                        >
-                          <Archive className="w-3 h-3" />
-                          Archive
-                        </button>
-                      )}
-                      {confirmDeleteVehId === v.id ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            void onDeleteVehicle(v.id);
-                            setConfirmDeleteVehId(null);
-                          }}
-                          className="px-2.5 py-1 text-xs font-semibold text-white bg-red-700 rounded cursor-pointer"
-                        >
-                          Confirm Delete
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setConfirmDeleteVehId(v.id)}
-                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 rounded cursor-pointer"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-          </div>
-        </div>
-      )}
+          {/* 9. HUMAN RESOURCES */}
+          {activeSection === 'hr' && (
+            <HrManagementPanel
+              currency={currency}
+              fxRates={fxRates}
+              staffProfile={staffProfile}
+              employees={hrEmployees}
+              leaveRequests={hrLeaveRequests}
+              canCreate={can('hr', 'create')}
+              canEdit={can('hr', 'edit')}
+              canDelete={can('hr', 'delete')}
+              canApprove={can('hr', 'approve')}
+              onSaveEmployee={onSaveHrEmployee}
+              onDeleteEmployee={onDeleteHrEmployee}
+              onCreateLeaveRequest={onCreateHrLeave}
+              onReviewLeave={onReviewHrLeave}
+            />
+          )}
 
-      {/* TAB 6: DOCUMENT MANAGER (WITH LIVE CUSTOMER-VISIBLE VS STAFF-ONLY TOGGLE) */}
-      {activeTab === 'documents' && canInventory && (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              const ord = orders.find((o) => o.id === docOrderId) || orders[0];
-              if (!ord) return;
-              await onCreateDocument({
-                orderId: ord.id,
-                orderNumber: ord.orderNumber,
-                customerId: ord.customerId,
-                title: docTitle,
-                docType,
-                fileName: docFileName || `${docType}.pdf`,
-                fileUrl: docUrl,
-                isCustomerVisible: docVisible,
-                notes: docNotes,
-              });
-              setDocTitle('');
-              setDocFileName('');
-              setDocUrl('');
-              setDocNotes('');
-            }}
-            className="lg:col-span-5 bg-white border border-slate-200 rounded-xl p-5 space-y-3.5"
-          >
-            <h2 className="text-sm font-bold text-slate-950 flex items-center gap-2 border-b border-slate-200 pb-2.5">
-              <FilePlus2 className="w-4 h-4 text-amber-600" />
-              Publish Export or Internal Document
-            </h2>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Export Order</label>
-              <select
-                value={docOrderId}
-                onChange={(e) => setDocOrderId(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-              >
-                {orders.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.orderNumber} — {o.customerCompany}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                Document Title *
-              </label>
-              <input
-                type="text"
-                required
-                value={docTitle}
-                onChange={(e) => setDocTitle(e.target.value)}
-                placeholder="Original Bill of Lading (B/L)"
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-              />
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
+          {/* 10. DOCUMENT MANAGEMENT */}
+          {activeSection === 'documents' && (
+            <div className="space-y-6">
               <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">Doc Type</label>
-                <select
-                  value={docType}
-                  onChange={(e) => setDocType(e.target.value as ExportDocType)}
-                  className="w-full px-2.5 py-2 text-xs border border-slate-300 rounded-lg"
-                >
-                  <option value="proforma_invoice">Proforma Invoice</option>
-                  <option value="export_certificate">Export Certificate</option>
-                  <option value="bill_of_lading">Bill of Lading</option>
-                  <option value="auction_sheet">Auction Sheet</option>
-                  <option value="inspection_report">Inspection Report</option>
-                  <option value="commercial_invoice">Commercial Invoice</option>
-                  <option value="internal_cost_sheet">Internal Cost Sheet</option>
-                </select>
+                <h2 className="text-2xl font-bold text-slate-950 dark:text-white tracking-tight">
+                  Export Document Vault
+                </h2>
+                <p className="text-sm text-slate-600 dark:text-slate-400 mt-1">
+                  Manage Proforma Invoices, Bills of Lading, JEVIC/QISJ Inspection Reports, and
+                  Export Certificates with customer visibility controls.
+                </p>
               </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-700 mb-1">File Name</label>
-                <input
-                  type="text"
-                  value={docFileName}
-                  onChange={(e) => setDocFileName(e.target.value)}
-                  placeholder="BL-701.pdf"
-                  className="w-full px-2.5 py-2 text-xs font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">
-                File URL (Optional)
-              </label>
-              <input
-                type="url"
-                value={docUrl}
-                onChange={(e) => setDocUrl(e.target.value)}
-                placeholder="https://..."
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-medium text-slate-700 mb-1">Notes</label>
-              <input
-                type="text"
-                value={docNotes}
-                onChange={(e) => setDocNotes(e.target.value)}
-                className="w-full px-3 py-2 text-xs border border-slate-300 rounded-lg"
-              />
-            </div>
-
-            <label className="flex items-center gap-2 p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs cursor-pointer">
-              <input
-                type="checkbox"
-                checked={docVisible}
-                onChange={(e) => setDocVisible(e.target.checked)}
-                className="accent-emerald-700"
-              />
-              <span>
-                <strong>Customer-Visible</strong> (Uncheck to restrict strictly to Internal Staff)
-              </span>
-            </label>
-
-            <button
-              type="submit"
-              className="w-full py-2.5 text-xs font-semibold text-white bg-slate-950 hover:bg-slate-800 rounded-lg cursor-pointer"
-            >
-              Publish Document Record
-            </button>
-          </form>
-
-          <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="px-5 py-3.5 bg-slate-50 border-b border-slate-200 text-sm font-bold text-slate-950">
-              All Trade Documents ({documents.length})
-            </div>
-            <div className="divide-y divide-slate-200">
-              {documents.map((d) => (
-                <div
-                  key={d.id}
-                  className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
-                >
-                  <div>
-                    <div className="font-mono text-[11px] text-amber-800 font-semibold">
-                      {d.orderNumber} · {d.docType.replace(/_/g, ' ')}
-                    </div>
-                    <div className="font-bold text-slate-950">{d.title}</div>
-                    <div className="text-slate-500 font-mono text-[11px]">{d.fileName}</div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={() => void onToggleDocVisibility(d, !d.isCustomerVisible)}
-                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg font-semibold cursor-pointer ${
-                        d.isCustomerVisible
-                          ? 'bg-emerald-100 text-emerald-900 hover:bg-emerald-200'
-                          : 'bg-amber-100 text-amber-950 hover:bg-amber-200'
-                      }`}
-                    >
-                      {d.isCustomerVisible ? (
-                        <>
-                          <Eye className="w-3.5 h-3.5" />
-                          Customer-Visible
-                        </>
-                      ) : (
-                        <>
-                          <EyeOff className="w-3.5 h-3.5" />
-                          Staff-Only
-                        </>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => void onDeleteDocument(d.id)}
-                      aria-label={`Delete ${d.title}`}
-                      className="p-1.5 text-slate-400 hover:text-red-700 cursor-pointer"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 7: IMMUTABLE AUDIT TRAIL (ADMIN ONLY) */}
-      {activeTab === 'audit' && isAdmin && (
-        <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-          <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
-            <div>
-              <h2 className="text-base font-bold text-slate-950">
-                Immutable Security &amp; Trade Audit Trail ({auditLogs.length})
-              </h2>
-              <p className="text-xs text-slate-500">
-                Append-only log enforced by Firestore security rules (updates and deletions denied).
-              </p>
-            </div>
-          </div>
-          <div className="divide-y divide-slate-200 text-xs">
-            {auditLogs.map((log) => (
-              <div
-                key={log.id}
-                className="px-6 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2"
-              >
-                <div className="space-y-0.5">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`px-2 py-0.5 font-mono text-[10px] font-bold uppercase rounded ${
-                        log.action === 'bid_blocked'
-                          ? 'bg-red-100 text-red-900'
-                          : log.action === 'quote_approved' || log.action === 'bid_placed'
-                            ? 'bg-emerald-100 text-emerald-900'
-                            : 'bg-slate-100 text-slate-800'
-                      }`}
-                    >
-                      {log.action}
-                    </span>
-                    <span className="font-mono text-slate-600">{log.actorEmail}</span>
-                    <span className="text-slate-400">({log.actorRole})</span>
-                  </div>
-                  <div className="text-slate-900">{log.summary}</div>
-                </div>
-                <div className="font-mono text-[11px] text-slate-400 shrink-0">
-                  {log.targetType}:{log.targetId}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* TAB 8: SYSTEM SETTINGS, USER RBAC & SEED TOOLS (ADMIN ONLY) */}
-      {activeTab === 'settings' && isAdmin && (
-        <div className="space-y-6">
-          {/* User Roles & Dealer Verification */}
-          <div className="bg-white border border-slate-200 rounded-xl overflow-hidden">
-            <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex items-center gap-2">
-              <Users className="w-4 h-4 text-amber-600" />
-              <h2 className="text-base font-bold text-slate-950">
-                Registered Users, RBAC Roles &amp; Verification ({users.length})
-              </h2>
-            </div>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                    <th className="py-3 px-4">User / Company</th>
-                    <th className="py-3 px-4">Email</th>
-                    <th className="py-3 px-4">Role</th>
-                    <th className="py-3 px-4">Verification</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-200">
-                  {users.map((u) => (
-                    <tr key={u.uid}>
-                      <td className="py-3 px-4">
-                        <div className="font-semibold text-slate-950">{u.displayName}</div>
-                        <div className="text-[11px] text-slate-500">{u.companyName}</div>
-                      </td>
-                      <td className="py-3 px-4 font-mono text-slate-700">{u.email}</td>
-                      <td className="py-3 px-4">
-                        <select
-                          value={u.role}
-                          onChange={(e) =>
-                            void onUpdateUserRole(u.uid, {
-                              role: e.target.value as PersistedUserRole,
-                              verified: u.verified,
-                              assignedRepName: u.assignedRepName,
-                              assignedRepEmail: u.assignedRepEmail,
-                            })
-                          }
-                          className="px-2.5 py-1 text-xs border border-slate-300 rounded-md bg-white"
-                        >
-                          <option value="customer">Customer</option>
-                          <option value="dealer">Dealer / Wholesale</option>
-                          <option value="sales">Sales Team</option>
-                          <option value="accounts">Accounts Department</option>
-                          <option value="operations">Operations Department</option>
-                          <option value="management">Management</option>
-                          <option value="admin">Administrator</option>
-                        </select>
-                      </td>
-                      <td className="py-3 px-4">
-                        <button
-                          type="button"
-                          onClick={() =>
-                            void onUpdateUserRole(u.uid, {
-                              role: u.role,
-                              verified: !u.verified,
-                              assignedRepName: u.assignedRepName,
-                              assignedRepEmail: u.assignedRepEmail,
-                            })
-                          }
-                          className={`px-3 py-1 rounded-md font-semibold cursor-pointer ${
-                            u.verified
-                              ? 'bg-emerald-100 text-emerald-900'
-                              : 'bg-amber-100 text-amber-950'
-                          }`}
-                        >
-                          {u.verified ? 'Verified' : 'Mark Verified'}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-
-          {/* SMBC Bank Wire & 9-Currency FX Rates */}
-          <form
-            onSubmit={async (e) => {
-              e.preventDefault();
-              await onSaveSettings(settingsDraft);
-            }}
-            className="bg-white border border-slate-200 rounded-xl p-6 space-y-5"
-          >
-            <h2 className="text-base font-bold text-slate-950 border-b border-slate-200 pb-3">
-              Official SMBC Tokyo Banking &amp; Multi-Currency Exchange Rates
-            </h2>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-              <div>
-                <label className="block font-medium text-slate-700 mb-1">Bank Name</label>
-                <input
-                  type="text"
-                  value={settingsDraft.bankName}
-                  onChange={(e) =>
-                    setSettingsDraft({ ...settingsDraft, bankName: e.target.value })
-                  }
-                  className="w-full px-3 py-2 border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block font-medium text-slate-700 mb-1">Account Number</label>
-                <input
-                  type="text"
-                  value={settingsDraft.accountNumber}
-                  onChange={(e) =>
-                    setSettingsDraft({ ...settingsDraft, accountNumber: e.target.value })
-                  }
-                  className="w-full px-3 py-2 font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block font-medium text-slate-700 mb-1">SWIFT / BIC Code</label>
-                <input
-                  type="text"
-                  value={settingsDraft.swiftCode}
-                  onChange={(e) =>
-                    setSettingsDraft({ ...settingsDraft, swiftCode: e.target.value.toUpperCase() })
-                  }
-                  className="w-full px-3 py-2 font-mono border border-slate-300 rounded-lg"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-              {(ALL_CURRENCIES.filter((c) => c !== 'USD') as (keyof CompanySettings['exchangeRates'])[]).map(
-                (code) => (
-                  <div key={code}>
-                    <label className="block font-medium text-slate-600 mb-1">
-                      1 USD → {code}
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={settingsDraft.exchangeRates[code]}
-                      onChange={(e) =>
-                        setSettingsDraft({
-                          ...settingsDraft,
-                          exchangeRates: {
-                            ...settingsDraft.exchangeRates,
-                            [code]: Number(e.target.value),
-                          },
-                        })
-                      }
-                      className="w-full px-3 py-1.5 font-mono border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                )
-              )}
-            </div>
-
-            <button
-              type="submit"
-              className="px-5 py-2.5 text-xs font-semibold text-white bg-slate-950 hover:bg-slate-800 rounded-lg cursor-pointer"
-            >
-              Save Banking &amp; FX Settings
-            </button>
-          </form>
-
-          {/* Database Seed Reset & Clear Controls */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div>
-              <h3 className="text-sm font-bold text-slate-950">
-                Firestore Database Initialization &amp; Sample Data Tools
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Populate all 8 export vehicles, 2 sample dealers (Kenya &amp; Zambia), sourcing
-                requests, quotations, 14-stage orders, messages, documents, and audit logs.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={() => void onSeedDatabase()}
-                className="px-4 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg cursor-pointer"
-              >
-                Seed / Reset Full Trade Database
-              </button>
-              {confirmClearData ? (
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      void onClearSampleData();
-                      setConfirmClearData(false);
+              <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                {can('documents', 'create') && (
+                  <form
+                    onSubmit={async (e) => {
+                      e.preventDefault();
+                      const ord = orders.find((o) => o.id === docOrderId) || orders[0];
+                      if (!ord) return;
+                      await onCreateDocument({
+                        orderId: ord.id,
+                        orderNumber: ord.orderNumber,
+                        customerId: ord.customerId,
+                        title: docTitle,
+                        docType,
+                        fileName: docFileName || `${docTitle.replace(/\s+/g, '_')}.pdf`,
+                        fileUrl: docUrl || 'https://auziotraders.com/docs/verified',
+                        isCustomerVisible: docVisible,
+                        notes: docNotes,
+                      });
+                      setDocTitle('');
+                      setDocFileName('');
+                      setDocUrl('');
+                      setDocNotes('');
                     }}
-                    className="px-3.5 py-2 text-xs font-semibold text-white bg-red-700 hover:bg-red-800 rounded-lg cursor-pointer"
+                    className="lg:col-span-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-3.5 h-fit"
                   >
-                    Confirm Clear All
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmClearData(false)}
-                    className="px-3 py-2 text-xs font-medium text-slate-700 bg-slate-100 rounded-lg cursor-pointer"
-                  >
-                    Cancel
-                  </button>
+                    <h3 className="text-base font-bold text-slate-950 dark:text-white">
+                      Register Export Document
+                    </h3>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Linked Export Order
+                      </label>
+                      <select
+                        value={docOrderId}
+                        onChange={(e) => setDocOrderId(e.target.value)}
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      >
+                        {orders.map((o) => (
+                          <option key={o.id} value={o.id}>
+                            {o.orderNumber} — {o.customerCompany}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Document Title *
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={docTitle}
+                        onChange={(e) => setDocTitle(e.target.value)}
+                        placeholder="e.g. Original Bill of Lading"
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Document Category
+                      </label>
+                      <select
+                        value={docType}
+                        onChange={(e) => setDocType(e.target.value as ExportDocType)}
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      >
+                        <option value="proforma_invoice">Proforma Invoice</option>
+                        <option value="bill_of_lading">Bill of Lading (B/L)</option>
+                        <option value="export_certificate">Export Certificate</option>
+                        <option value="inspection_report">Inspection Report (JEVIC/QISJ)</option>
+                        <option value="auction_sheet">Auction Sheet</option>
+                        <option value="commercial_invoice">Commercial Invoice</option>
+                        <option value="internal_cost_sheet">Internal Cost Sheet</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        File URL / Storage Link
+                      </label>
+                      <input
+                        type="url"
+                        value={docUrl}
+                        onChange={(e) => setDocUrl(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full px-3 py-2 text-sm bg-white dark:bg-slate-950 border border-slate-300 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                      />
+                    </div>
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-300 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={docVisible}
+                        onChange={(e) => setDocVisible(e.target.checked)}
+                        className="accent-amber-600"
+                      />
+                      Release immediately to Customer Portal
+                    </label>
+                    <button
+                      type="submit"
+                      className="w-full py-2.5 text-sm font-semibold text-white bg-slate-950 dark:bg-amber-500 dark:text-slate-950 rounded-lg cursor-pointer"
+                    >
+                      Save Document Record
+                    </button>
+                  </form>
+                )}
+
+                <div className="lg:col-span-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl divide-y divide-slate-200 dark:divide-slate-800">
+                  {documents.length === 0 ? (
+                    <div className="p-10 text-center text-sm text-slate-500">
+                      No export documents registered yet.
+                    </div>
+                  ) : (
+                    documents.map((d) => (
+                      <div
+                        key={d.id}
+                        className="p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                      >
+                        <div>
+                          <div className="font-mono text-xs font-bold text-amber-700 dark:text-amber-400">
+                            {d.orderNumber} · {d.docType.replace(/_/g, ' ').toUpperCase()}
+                          </div>
+                          <div className="text-sm font-bold text-slate-950 dark:text-white">
+                            {d.title}
+                          </div>
+                          <div className="text-xs text-slate-500 dark:text-slate-400">
+                            {d.fileName} · Uploaded by {d.uploadedByName}
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {d.fileUrl && (
+                            <a
+                              href={d.fileUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1.5 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
+                              title="Open document"
+                            >
+                              <ExternalLink className="w-4 h-4" />
+                            </a>
+                          )}
+                          {can('documents', 'edit') && (
+                            <button
+                              type="button"
+                              onClick={() => void onToggleDocVisibility(d, !d.isCustomerVisible)}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-semibold rounded-lg cursor-pointer ${
+                                d.isCustomerVisible
+                                  ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300'
+                                  : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                              }`}
+                            >
+                              {d.isCustomerVisible ? (
+                                <>
+                                  <Eye className="w-3.5 h-3.5" />
+                                  Customer Visible
+                                </>
+                              ) : (
+                                <>
+                                  <EyeOff className="w-3.5 h-3.5" />
+                                  Staff Only
+                                </>
+                              )}
+                            </button>
+                          )}
+                          {can('documents', 'delete') && (
+                            <button
+                              type="button"
+                              onClick={() => void onDeleteDocument(d.id)}
+                              aria-label="Delete document"
+                              className="p-1.5 text-slate-400 hover:text-red-600 cursor-pointer"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
                 </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmClearData(true)}
-                  className="px-4 py-2 text-xs font-semibold text-red-800 bg-red-50 border border-red-200 hover:bg-red-100 rounded-lg cursor-pointer"
-                >
-                  Clear Sample Data
-                </button>
-              )}
+              </div>
             </div>
-          </div>
-        </div>
-      )}
+          )}
 
-      {/* TAB 9: LANDING CMS & CUSTOMER TESTIMONIALS (ADMIN / MANAGEMENT ONLY) */}
-      {activeTab === 'cms' && isAdmin && (
-        <AdminCmsPanel
-          landingContent={landingContent}
-          testimonials={testimonials}
-          onSaveLandingContent={onSaveLandingContent}
-          onSaveTestimonial={onSaveTestimonial}
-          onDeleteTestimonial={onDeleteTestimonial}
-        />
-      )}
+          {/* 11. REPORTS, TASKS & TEAM MESSAGING */}
+          {activeSection === 'reports' && (
+            <ReportsTasksHubPanel
+              currency={currency}
+              fxRates={fxRates}
+              staffProfile={staffProfile}
+              vehicles={vehicles}
+              orders={orders}
+              inquiries={inquiries}
+              financeRecords={financeRecords}
+              teamTasks={teamTasks}
+              teamMessages={teamMessages}
+              canCreate={can('reports', 'create')}
+              canEdit={can('reports', 'create')}
+              canDelete={can('reports', 'delete') || role === 'admin'}
+              canExport={can('reports', 'export')}
+              onCreateTask={onCreateTeamTask}
+              onUpdateTaskStatus={onUpdateTeamTaskStatus}
+              onDeleteTask={onDeleteTeamTask}
+              onPostTeamMessage={onPostTeamMessage}
+              onDownloadFullBackup={handleDownloadFullBackup}
+            />
+          )}
 
+          {/* 12. WEBSITE CMS */}
+          {activeSection === 'cms' && (
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
+              <AdminCmsPanel
+                landingContent={landingContent}
+                testimonials={testimonials}
+                onSaveLandingContent={onSaveLandingContent}
+                onSaveTestimonial={onSaveTestimonial}
+                onDeleteTestimonial={onDeleteTestimonial}
+              />
+            </div>
+          )}
+
+          {/* 13. AI & AUTOMATION ASSISTANT */}
+          {activeSection === 'ai' && (
+            <AiAutomationPanel
+              key={`${aiPreset.tool}-${aiPreset.prompt.slice(0, 20)}`}
+              vehicles={vehicles}
+              users={users}
+              sourcingRequests={sourcingRequests}
+              quotations={quotations}
+              orders={orders}
+              inquiries={inquiries}
+              financeRecords={financeRecords}
+              initialTool={aiPreset.tool}
+              initialPrompt={aiPreset.prompt}
+            />
+          )}
+
+          {/* 14. USERS, ROLES & GRANULAR PERMISSIONS */}
+          {activeSection === 'users' && (
+            <UsersPermissionsPanel
+              users={users}
+              currentUserUid={staffProfile?.uid}
+              canEdit={can('users', 'edit')}
+              onUpdateUser={onUpdateUserRole}
+            />
+          )}
+
+          {/* 15. SETTINGS, AUTOMATIC FX, PROTECTED BANKING & AUDIT */}
+          {activeSection === 'settings' && (
+            <AdminSettingsPanel
+              role={role}
+              settings={settings}
+              liveFx={liveFx}
+              auditLogs={auditLogs}
+              canEditSettings={can('settings', 'edit')}
+              canViewBanking={can('banking', 'view')}
+              canEditBanking={can('banking', 'edit')}
+              canExport={can('settings', 'export')}
+              onRefreshFx={onRefreshFx}
+              onSaveCompanyProfile={onSaveSettings}
+              onSaveBankingDetails={onSaveBankingDetails}
+              onDownloadFullBackup={handleDownloadFullBackup}
+              onSeedDatabase={onSeedDatabase}
+              onClearSampleData={onClearSampleData}
+            />
+          )}
+        </main>
+      </div>
+
+      {/* Add / Edit / Import Vehicle Modal */}
       {vehicleModalOpen && (
         <AdminVehicleModal
           vehicle={editingVehicle}
@@ -1898,7 +2260,12 @@ export function StaffConsoleView({
             setEditingVehicle(null);
             setIsImportMode(false);
           }}
-          onSaved={(msg) => onNotify(msg)}
+          onSaved={(msg) => {
+            onNotify(msg);
+            setVehicleModalOpen(false);
+            setEditingVehicle(null);
+            setIsImportMode(false);
+          }}
         />
       )}
     </div>

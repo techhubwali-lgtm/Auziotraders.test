@@ -11,6 +11,7 @@ import {
 import { useMemo, useState } from 'react';
 import { WORLD_CURRENCIES } from '../data/currencies';
 import { OFFICIAL_LOGO_URL } from '../data/landingDefaults';
+import { isStaffRole } from '../data/permissions';
 import { WORLD_COUNTRIES, getWorldCountryByCode } from '../data/worldCountriesPorts';
 import type {
   AppView,
@@ -125,9 +126,7 @@ export function Navbar({
     }));
   }, [selectedCountry]);
 
-  const isStaffUser =
-    isAuthenticated &&
-    ['sales', 'accounts', 'operations', 'management', 'admin'].includes(userRole);
+  const isStaffUser = isAuthenticated && isStaffRole(userRole);
 
   const dashboardView: AppView = isStaffUser ? 'staff_console' : 'customer_portal';
 

@@ -11,6 +11,7 @@ import {
   searchLiveAuctions,
 } from './server/auctionProxy';
 import { getLiveExchangeRates } from './server/exchangeRates';
+import { runAdminAiAssistant, type AdminAiTaskType } from './server/aiAssistant';
 import type { AuctionFeedTable, SteeringType } from './src/types/portal';
 
 function resolveAppDir(): string {
@@ -163,6 +164,47 @@ async function startServer() {
     const data = await getLiveExchangeRates(force);
     res.setHeader('Cache-Control', data.ok ? 'public, max-age=900' : 'no-store');
     res.status(data.ok ? 200 : 503).json(data);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Server-Side Gemini AI Assistant for Admin Console (Staff Authenticated)
+  // ---------------------------------------------------------------------------
+  app.post('/api/admin/ai-assist', async (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    if (!authHeader.startsWith('Bearer ') || authHeader.slice(7).trim().length < 20) {
+      res.status(401).json({
+        ok: false,
+        generatedAt: new Date().toISOString(),
+        error: 'Authentication required to use the Admin AI Assistant.',
+      });
+      return;
+    }
+
+    const body = (req.body || {}) as {
+      task?: AdminAiTaskType;
+      prompt?: string;
+      contextSummary?: string;
+    };
+
+    const allowedTasks: AdminAiTaskType[] = [
+      'daily_report',
+      'sales_followup',
+      'document_extract',
+      'business_chat',
+    ];
+    const task: AdminAiTaskType =
+      typeof body.task === 'string' && allowedTasks.includes(body.task as AdminAiTaskType)
+        ? (body.task as AdminAiTaskType)
+        : 'business_chat';
+
+    const result = await runAdminAiAssistant({
+      task,
+      prompt: typeof body.prompt === 'string' ? body.prompt : '',
+      contextSummary: typeof body.contextSummary === 'string' ? body.contextSummary : '',
+    });
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(result.ok ? 200 : 400).json(result);
   });
 
   const httpServer = http.createServer(app);

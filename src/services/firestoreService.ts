@@ -35,6 +35,9 @@ import type {
   ExportDocType,
   ExportDocument,
   ExportOrder,
+  FinanceRecord,
+  HrEmployee,
+  HrLeaveRequest,
   Inquiry,
   LandingPageContent,
   ListingType,
@@ -43,9 +46,14 @@ import type {
   OrderStatusRecord,
   PersistedUserRole,
   Quotation,
+  RolePermissionsMap,
+  SalesTarget,
   ShippingMethod,
   SourcingOption,
   SourcingRequest,
+  TeamChannelId,
+  TeamChannelMessage,
+  TeamTask,
   TradeOrderMilestone,
   UserProfile,
   UserRole,
@@ -504,23 +512,32 @@ export async function adminUpdateUser(
     verified: boolean;
     assignedRepName: string;
     assignedRepEmail: string;
+    department?: string;
+    permissions?: RolePermissionsMap;
   }
 ): Promise<void> {
   const path = `users/${uid}`;
   try {
-    await updateDoc(doc(db, 'users', uid), {
+    const payload: Record<string, unknown> = {
       role: updates.role,
       verified: Boolean(updates.verified),
       assignedRepName: updates.assignedRepName.trim().slice(0, 100),
       assignedRepEmail: updates.assignedRepEmail.trim().slice(0, 120),
       updatedAt: serverTimestamp(),
-    });
+    };
+    if (typeof updates.department === 'string') {
+      payload.department = updates.department.trim().slice(0, 60);
+    }
+    if (updates.permissions) {
+      payload.permissions = updates.permissions;
+    }
+    await updateDoc(doc(db, 'users', uid), payload);
     void recordAuditLog({
       actorRole: 'admin',
-      action: 'user_role_updated',
+      action: 'user_permissions_updated',
       targetType: 'user',
       targetId: uid,
-      summary: `Updated user ${uid}: role=${updates.role}, verified=${String(updates.verified)}.`,
+      summary: `Updated user ${uid}: role=${updates.role}, verified=${String(updates.verified)}${updates.permissions ? ', custom granular permissions saved' : ''}.`,
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
@@ -1576,4 +1593,486 @@ export async function deleteTestimonial(testimonialId: string): Promise<void> {
     handleFirestoreError(error, OperationType.DELETE, `testimonials/${testimonialId}`);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Protected Banking Details Update (Restricted + Mandatory Audit Trail)
+// ---------------------------------------------------------------------------
+
+export async function saveBankingDetailsProtected(
+  settings: CompanySettings,
+  verificationReason: string
+): Promise<void> {
+  const path = 'companySettings/exportProfile';
+  const payload = {
+    bankName: settings.bankName.trim().slice(0, 120),
+    bankBranch: settings.bankBranch.trim().slice(0, 120),
+    accountName: settings.accountName.trim().slice(0, 120),
+    accountNumber: settings.accountNumber.trim().slice(0, 60),
+    swiftCode: settings.swiftCode.trim().toUpperCase().slice(0, 20),
+    bankAddress: settings.bankAddress.trim().slice(0, 240),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    await setDoc(doc(db, 'companySettings', 'exportProfile'), payload, { merge: true });
+    await recordAuditLog({
+      actorRole: 'admin',
+      action: 'banking_details_updated',
+      targetType: 'companySettings',
+      targetId: 'exportProfile',
+      summary: `Updated corporate wire details (${payload.bankName}, SWIFT ${payload.swiftCode}). Verification reason: ${verificationReason.trim().slice(0, 180)}`,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CRM Inquiries Status & Follow-up Notes
+// ---------------------------------------------------------------------------
+
+export async function updateInquiryStaff(
+  inquiryId: string,
+  updates: { status: OrderMilestone; adminNotes: string; vesselName?: string; etaDate?: string }
+): Promise<void> {
+  const path = `inquiries/${inquiryId}`;
+  try {
+    await updateDoc(doc(db, 'inquiries', inquiryId), {
+      status: updates.status,
+      adminNotes: updates.adminNotes.trim().slice(0, 1000),
+      ...(typeof updates.vesselName === 'string'
+        ? { vesselName: updates.vesselName.trim().slice(0, 100) }
+        : {}),
+      ...(typeof updates.etaDate === 'string'
+        ? { etaDate: updates.etaDate.trim().slice(0, 40) }
+        : {}),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Accounts & Finance Ledger (Invoices, Payments, Expenses, Reconciliation)
+// ---------------------------------------------------------------------------
+
+export function subscribeFinanceRecords(
+  canView: boolean,
+  onData: (items: FinanceRecord[]) => void
+): Unsubscribe {
+  if (!canView) {
+    onData([]);
+    return () => {};
+  }
+  return onSnapshot(
+    collection(db, 'financeRecords'),
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<FinanceRecord, 'id'>) }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      onData(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'financeRecords');
+      } catch {
+        // Logged
+      }
+    }
+  );
+}
+
+export async function createFinanceRecord(
+  input: Omit<FinanceRecord, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<string> {
+  const id = generateDocumentId('fin');
+  const path = `financeRecords/${id}`;
+  try {
+    await setDoc(doc(db, 'financeRecords', id), {
+      type: input.type,
+      referenceCode: input.referenceCode.trim().slice(0, 40),
+      orderId: input.orderId.trim().slice(0, 128),
+      orderNumber: input.orderNumber.trim().slice(0, 40),
+      counterpartyName: input.counterpartyName.trim().slice(0, 120),
+      category: input.category.trim().slice(0, 80),
+      amountUsd: Math.max(0, Math.round(Number(input.amountUsd) || 0)),
+      currency: input.currency.trim().toUpperCase().slice(0, 3) || 'USD',
+      status: input.status,
+      reconciled: Boolean(input.reconciled),
+      transactionDate: input.transactionDate.trim().slice(0, 32),
+      notes: input.notes.trim().slice(0, 800),
+      createdByUid: input.createdByUid.slice(0, 128),
+      createdByName: input.createdByName.trim().slice(0, 100),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    void recordAuditLog({
+      actorRole: 'accounts',
+      action: 'finance_record_created',
+      targetType: 'financeRecord',
+      targetId: id,
+      summary: `Logged ${input.type} ${input.referenceCode} for $${Math.round(input.amountUsd).toLocaleString()} (${input.counterpartyName}).`,
+    });
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function updateFinanceRecordStatus(
+  id: string,
+  updates: { status: FinanceRecord['status']; reconciled: boolean }
+): Promise<void> {
+  const path = `financeRecords/${id}`;
+  try {
+    await updateDoc(doc(db, 'financeRecords', id), {
+      status: updates.status,
+      reconciled: Boolean(updates.reconciled),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteFinanceRecord(id: string): Promise<void> {
+  const path = `financeRecords/${id}`;
+  try {
+    await deleteDoc(doc(db, 'financeRecords', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Human Resources (Employees & Leave Requests)
+// ---------------------------------------------------------------------------
+
+export function subscribeHrEmployees(
+  canView: boolean,
+  onData: (items: HrEmployee[]) => void
+): Unsubscribe {
+  if (!canView) {
+    onData([]);
+    return () => {};
+  }
+  return onSnapshot(
+    collection(db, 'hrEmployees'),
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<HrEmployee, 'id'>) }))
+        .sort((a, b) => a.fullName.localeCompare(b.fullName));
+      onData(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'hrEmployees');
+      } catch {
+        // Logged
+      }
+    }
+  );
+}
+
+export async function saveHrEmployee(
+  input: Omit<HrEmployee, 'id' | 'createdAt' | 'updatedAt'>,
+  existingId?: string
+): Promise<string> {
+  const id = existingId || generateDocumentId('emp');
+  const path = `hrEmployees/${id}`;
+  const payload = {
+    employeeCode: input.employeeCode.trim().slice(0, 32),
+    fullName: input.fullName.trim().slice(0, 100),
+    email: input.email.trim().slice(0, 120),
+    phone: input.phone.trim().slice(0, 40),
+    department: input.department.trim().slice(0, 60),
+    jobTitle: input.jobTitle.trim().slice(0, 80),
+    status: input.status,
+    baseSalaryUsd: Math.max(0, Math.round(Number(input.baseSalaryUsd) || 0)),
+    commissionRatePct: Math.max(0, Math.min(50, Number(input.commissionRatePct) || 0)),
+    attendanceDaysThisMonth: Math.max(0, Math.min(31, Math.round(Number(input.attendanceDaysThisMonth) || 0))),
+    leaveDaysRemaining: Math.max(0, Math.min(60, Math.round(Number(input.leaveDaysRemaining) || 0))),
+    performanceRating: Math.max(1, Math.min(5, Number(input.performanceRating) || 4)),
+    joinedDate: input.joinedDate.trim().slice(0, 32),
+    notes: input.notes.trim().slice(0, 600),
+    updatedAt: serverTimestamp(),
+  };
+  try {
+    if (existingId) {
+      await updateDoc(doc(db, 'hrEmployees', id), payload);
+    } else {
+      await setDoc(doc(db, 'hrEmployees', id), { ...payload, createdAt: serverTimestamp() });
+    }
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function deleteHrEmployee(id: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'hrEmployees', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `hrEmployees/${id}`);
+  }
+}
+
+export function subscribeHrLeaveRequests(
+  canView: boolean,
+  onData: (items: HrLeaveRequest[]) => void
+): Unsubscribe {
+  if (!canView) {
+    onData([]);
+    return () => {};
+  }
+  return onSnapshot(
+    collection(db, 'hrLeaveRequests'),
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<HrLeaveRequest, 'id'>) }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      onData(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'hrLeaveRequests');
+      } catch {
+        // Logged
+      }
+    }
+  );
+}
+
+export async function createHrLeaveRequest(
+  input: Omit<HrLeaveRequest, 'id' | 'status' | 'reviewedByName' | 'createdAt' | 'updatedAt'>
+): Promise<string> {
+  const id = generateDocumentId('lv');
+  const path = `hrLeaveRequests/${id}`;
+  try {
+    await setDoc(doc(db, 'hrLeaveRequests', id), {
+      employeeId: input.employeeId.slice(0, 128),
+      employeeName: input.employeeName.trim().slice(0, 100),
+      department: input.department.trim().slice(0, 60),
+      leaveType: input.leaveType,
+      startDate: input.startDate.trim().slice(0, 32),
+      endDate: input.endDate.trim().slice(0, 32),
+      days: Math.max(1, Math.min(90, Math.round(Number(input.days) || 1))),
+      reason: input.reason.trim().slice(0, 500),
+      status: 'pending',
+      reviewedByName: '',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, path);
+  }
+}
+
+export async function reviewHrLeaveRequest(
+  id: string,
+  status: 'approved' | 'rejected',
+  reviewedByName: string
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'hrLeaveRequests', id), {
+      status,
+      reviewedByName: reviewedByName.trim().slice(0, 100),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `hrLeaveRequests/${id}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Employee Task Management & Internal Team Messaging
+// ---------------------------------------------------------------------------
+
+export function subscribeTeamTasks(
+  isStaff: boolean,
+  onData: (items: TeamTask[]) => void
+): Unsubscribe {
+  if (!isStaff) {
+    onData([]);
+    return () => {};
+  }
+  return onSnapshot(
+    collection(db, 'teamTasks'),
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<TeamTask, 'id'>) }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      onData(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'teamTasks');
+      } catch {
+        // Logged
+      }
+    }
+  );
+}
+
+export async function createTeamTask(
+  input: Omit<TeamTask, 'id' | 'createdAt' | 'updatedAt'>
+): Promise<string> {
+  const id = generateDocumentId('tsk');
+  try {
+    await setDoc(doc(db, 'teamTasks', id), {
+      title: input.title.trim().slice(0, 140),
+      description: input.description.trim().slice(0, 800),
+      department: input.department.trim().slice(0, 60),
+      assignedToName: input.assignedToName.trim().slice(0, 100),
+      priority: input.priority,
+      status: input.status,
+      dueDate: input.dueDate.trim().slice(0, 32),
+      createdByUid: input.createdByUid.slice(0, 128),
+      createdByName: input.createdByName.trim().slice(0, 100),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `teamTasks/${id}`);
+  }
+}
+
+export async function updateTeamTaskStatus(id: string, status: TeamTask['status']): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'teamTasks', id), {
+      status,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `teamTasks/${id}`);
+  }
+}
+
+export async function deleteTeamTask(id: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'teamTasks', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `teamTasks/${id}`);
+  }
+}
+
+export function subscribeTeamMessages(
+  isStaff: boolean,
+  onData: (items: TeamChannelMessage[]) => void
+): Unsubscribe {
+  if (!isStaff) {
+    onData([]);
+    return () => {};
+  }
+  return onSnapshot(
+    collection(db, 'teamMessages'),
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<TeamChannelMessage, 'id'>) }))
+        .sort((a, b) => toMillis(a.createdAt) - toMillis(b.createdAt));
+      onData(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'teamMessages');
+      } catch {
+        // Logged
+      }
+    }
+  );
+}
+
+export async function postTeamChannelMessage(input: {
+  channel: TeamChannelId;
+  senderUid: string;
+  senderName: string;
+  senderRole: PersistedUserRole;
+  body: string;
+}): Promise<string> {
+  const id = generateDocumentId('tmsg');
+  try {
+    await setDoc(doc(db, 'teamMessages', id), {
+      channel: input.channel,
+      senderUid: input.senderUid.slice(0, 128),
+      senderName: input.senderName.trim().slice(0, 100),
+      senderRole: input.senderRole,
+      body: input.body.trim().slice(0, 1500),
+      createdAt: serverTimestamp(),
+    });
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, `teamMessages/${id}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Sales Targets & Commission Plans
+// ---------------------------------------------------------------------------
+
+export function subscribeSalesTargets(
+  isStaff: boolean,
+  onData: (items: SalesTarget[]) => void
+): Unsubscribe {
+  if (!isStaff) {
+    onData([]);
+    return () => {};
+  }
+  return onSnapshot(
+    collection(db, 'salesTargets'),
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as Omit<SalesTarget, 'id'>) }))
+        .sort((a, b) => toMillis(b.createdAt) - toMillis(a.createdAt));
+      onData(list);
+    },
+    (error) => {
+      try {
+        handleFirestoreError(error, OperationType.LIST, 'salesTargets');
+      } catch {
+        // Logged
+      }
+    }
+  );
+}
+
+export async function saveSalesTarget(
+  input: Omit<SalesTarget, 'id' | 'createdAt' | 'updatedAt'>,
+  existingId?: string
+): Promise<string> {
+  const id = existingId || generateDocumentId('tgt');
+  const payload = {
+    staffName: input.staffName.trim().slice(0, 100),
+    staffEmail: input.staffEmail.trim().slice(0, 120),
+    period: input.period.trim().slice(0, 40),
+    targetRevenueUsd: Math.max(0, Math.round(Number(input.targetRevenueUsd) || 0)),
+    achievedRevenueUsd: Math.max(0, Math.round(Number(input.achievedRevenueUsd) || 0)),
+    targetUnits: Math.max(0, Math.round(Number(input.targetUnits) || 0)),
+    soldUnits: Math.max(0, Math.round(Number(input.soldUnits) || 0)),
+    commissionRatePct: Math.max(0, Math.min(35, Number(input.commissionRatePct) || 0)),
+    notes: input.notes.trim().slice(0, 400),
+    updatedAt: serverTimestamp(),
+  };
+  try {
+    if (existingId) {
+      await updateDoc(doc(db, 'salesTargets', id), payload);
+    } else {
+      await setDoc(doc(db, 'salesTargets', id), { ...payload, createdAt: serverTimestamp() });
+    }
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `salesTargets/${id}`);
+  }
+}
+
+export async function deleteSalesTarget(id: string): Promise<void> {
+  try {
+    await deleteDoc(doc(db, 'salesTargets', id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `salesTargets/${id}`);
+  }
+}
+
 

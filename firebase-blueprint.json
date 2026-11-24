@@ -375,12 +375,121 @@
         "addedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["email", "role", "addedAt"]
+    },
+    "FinanceRecord": {
+      "title": "FinanceRecord",
+      "description": "Accounting ledger entry for customer invoices, payments received, operating expenses, and bank reconciliation.",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string", "enum": ["invoice", "payment", "expense"] },
+        "referenceCode": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "orderId": { "type": "string", "maxLength": 128 },
+        "orderNumber": { "type": "string", "maxLength": 40 },
+        "counterpartyName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "amountUsd": { "type": "number" },
+        "currency": { "type": "string", "minLength": 3, "maxLength": 3 },
+        "status": { "type": "string", "enum": ["paid", "pending", "overdue", "reconciled"] },
+        "reconciled": { "type": "boolean" },
+        "transactionDate": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 800 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdByName": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["type", "referenceCode", "counterpartyName", "category", "amountUsd", "currency", "status", "reconciled", "transactionDate"]
+    },
+    "HrEmployee": {
+      "title": "HrEmployee",
+      "description": "Employee HR directory record including department, attendance, salary, and performance.",
+      "type": "object",
+      "properties": {
+        "employeeCode": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 120 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "department": { "type": "string", "minLength": 2, "maxLength": 60 },
+        "jobTitle": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "status": { "type": "string", "enum": ["active", "on_leave", "inactive"] },
+        "baseSalaryUsd": { "type": "number" },
+        "commissionRatePct": { "type": "number" },
+        "attendanceDaysThisMonth": { "type": "integer" },
+        "leaveDaysRemaining": { "type": "integer" },
+        "performanceRating": { "type": "number" },
+        "joinedDate": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 600 }
+      },
+      "required": ["employeeCode", "fullName", "department", "jobTitle", "status", "baseSalaryUsd"]
+    },
+    "HrLeaveRequest": {
+      "title": "HrLeaveRequest",
+      "description": "Employee leave request and approval status.",
+      "type": "object",
+      "properties": {
+        "employeeId": { "type": "string", "maxLength": 128 },
+        "employeeName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "department": { "type": "string", "maxLength": 60 },
+        "leaveType": { "type": "string", "enum": ["annual", "sick", "personal", "unpaid"] },
+        "startDate": { "type": "string", "maxLength": 32 },
+        "endDate": { "type": "string", "maxLength": 32 },
+        "days": { "type": "integer" },
+        "reason": { "type": "string", "maxLength": 500 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "reviewedByName": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["employeeName", "leaveType", "startDate", "endDate", "days", "status"]
+    },
+    "TeamTask": {
+      "title": "TeamTask",
+      "description": "Internal employee task management record.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "description": { "type": "string", "maxLength": 800 },
+        "department": { "type": "string", "maxLength": 60 },
+        "assignedToName": { "type": "string", "maxLength": 100 },
+        "priority": { "type": "string", "enum": ["low", "medium", "high", "urgent"] },
+        "status": { "type": "string", "enum": ["todo", "in_progress", "review", "done"] },
+        "dueDate": { "type": "string", "maxLength": 32 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdByName": { "type": "string", "maxLength": 100 }
+      },
+      "required": ["title", "department", "priority", "status"]
+    },
+    "TeamChannelMessage": {
+      "title": "TeamChannelMessage",
+      "description": "Internal staff team messaging channel post.",
+      "type": "object",
+      "properties": {
+        "channel": { "type": "string", "enum": ["general", "sales", "operations", "accounts", "management"] },
+        "senderUid": { "type": "string", "maxLength": 128 },
+        "senderName": { "type": "string", "maxLength": 100 },
+        "senderRole": { "type": "string", "maxLength": 40 },
+        "body": { "type": "string", "minLength": 1, "maxLength": 1500 }
+      },
+      "required": ["channel", "senderUid", "senderName", "body"]
+    },
+    "SalesTarget": {
+      "title": "SalesTarget",
+      "description": "Sales executive targets and commission rate definitions.",
+      "type": "object",
+      "properties": {
+        "staffName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "staffEmail": { "type": "string", "maxLength": 120 },
+        "period": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "targetRevenueUsd": { "type": "number" },
+        "achievedRevenueUsd": { "type": "number" },
+        "targetUnits": { "type": "integer" },
+        "soldUnits": { "type": "integer" },
+        "commissionRatePct": { "type": "number" },
+        "notes": { "type": "string", "maxLength": 400 }
+      },
+      "required": ["staffName", "period", "targetRevenueUsd", "targetUnits", "commissionRatePct"]
     }
   },
   "firestore": {
     "/users/{uid}": {
       "schema": { "$ref": "#/entities/UserProfile" },
-      "description": "Customer/dealer and staff/admin user profiles enforcing RBAC and verification."
+      "description": "Customer/dealer and staff/admin user profiles enforcing granular RBAC and verification."
     },
     "/vehicles/{vehicleId}": {
       "schema": { "$ref": "#/entities/Vehicle" },
@@ -408,7 +517,7 @@
     },
     "/auditLogs/{logId}": {
       "schema": { "$ref": "#/entities/AuditLog" },
-      "description": "Immutable chronological audit trail readable only by administrators."
+      "description": "Immutable chronological audit trail of banking changes, permissions, bids, and exports."
     },
     "/inquiries/{inquiryId}": {
       "schema": { "$ref": "#/entities/Inquiry" },
@@ -420,11 +529,35 @@
     },
     "/companySettings/{settingId}": {
       "schema": { "$ref": "#/entities/CompanySettings" },
-      "description": "Official SMBC Tokyo wire details and multi-currency exchange rates."
+      "description": "Official corporate profile and protected banking wire details."
     },
     "/admins/{adminUid}": {
       "schema": { "$ref": "#/entities/AdminUser" },
       "description": "Administrator registry."
+    },
+    "/financeRecords/{recordId}": {
+      "schema": { "$ref": "#/entities/FinanceRecord" },
+      "description": "Accounts & Finance invoices, payments, expenses, and reconciliation entries."
+    },
+    "/hrEmployees/{employeeId}": {
+      "schema": { "$ref": "#/entities/HrEmployee" },
+      "description": "HR employee directory, attendance, payroll, and performance ratings."
+    },
+    "/hrLeaveRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/HrLeaveRequest" },
+      "description": "HR leave requests and management/HR approval decisions."
+    },
+    "/teamTasks/{taskId}": {
+      "schema": { "$ref": "#/entities/TeamTask" },
+      "description": "Internal employee task board."
+    },
+    "/teamMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/TeamChannelMessage" },
+      "description": "Internal department team messaging channels."
+    },
+    "/salesTargets/{targetId}": {
+      "schema": { "$ref": "#/entities/SalesTarget" },
+      "description": "Sales team targets and commission plans."
     }
   }
 }

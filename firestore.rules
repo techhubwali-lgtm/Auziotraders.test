@@ -3,16 +3,29 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    // Global default-deny safety net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
     // =========================================================================
-    // Helper Functions — AUZIO TRADERS Role-Based Access Control (RBAC)
+    // Helper Functions — AUZIO TRADERS Granular Backend RBAC & Validation
     // =========================================================================
 
     function isSignedIn() {
       return request.auth != null;
     }
 
+    function isVerifiedAuth() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
     function isOwner(userId) {
       return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
     function userDocExists() {
@@ -20,42 +33,69 @@ service cloud.firestore {
         exists(/databases/$(database)/documents/users/$(request.auth.uid));
     }
 
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
     function userRole() {
-      return userDocExists()
-        ? get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role
-        : 'visitor';
+      return userDocExists() ? userData().role : 'visitor';
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        (
-          request.auth.token.email == 'techhub.wali@gmail.com' &&
-          request.auth.token.email_verified == true
-        ) ||
+      return isVerifiedAuth() && (
+        request.auth.token.email == 'techhub.wali@gmail.com' ||
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
         userRole() == 'admin'
       );
     }
 
+    function hasExplicitPerm(moduleKey, action) {
+      return isVerifiedAuth() &&
+        userDocExists() &&
+        ('permissions' in userData()) &&
+        userData().permissions is map &&
+        (moduleKey in userData().permissions) &&
+        userData().permissions[moduleKey] is list &&
+        userData().permissions[moduleKey].hasAny([action]);
+    }
+
     function isManagement() {
-      return isAdmin() || userRole() == 'management';
+      return isAdmin() || (isVerifiedAuth() && userRole() == 'management');
+    }
+
+    function isSalesManager() {
+      return isManagement() || (isVerifiedAuth() && userRole() == 'sales_manager');
     }
 
     function isSales() {
-      return isManagement() || userRole() == 'sales';
+      return isSalesManager() || (isVerifiedAuth() && userRole() == 'sales');
     }
 
     function isAccounts() {
-      return isManagement() || userRole() == 'accounts';
+      return isManagement() || (isVerifiedAuth() && userRole() == 'accounts');
     }
 
     function isOperations() {
-      return isManagement() || userRole() == 'operations';
+      return isManagement() || (isVerifiedAuth() && userRole() == 'operations');
+    }
+
+    function isHr() {
+      return isManagement() || (isVerifiedAuth() && userRole() == 'hr');
+    }
+
+    function isIt() {
+      return isAdmin() || (isVerifiedAuth() && userRole() == 'it');
     }
 
     function isStaff() {
-      return isManagement() ||
-        userRole() in ['sales', 'accounts', 'operations', 'management', 'admin'];
+      return isAdmin() || (
+        isVerifiedAuth() &&
+        userRole() in ['sales', 'sales_manager', 'accounts', 'operations', 'hr', 'it', 'management', 'admin']
+      );
+    }
+
+    function canAccessModule(moduleKey, action, defaultAllowed) {
+      return isAdmin() || defaultAllowed || hasExplicitPerm(moduleKey, action);
     }
 
     function isNonEmptyString(val, maxLen) {
@@ -79,7 +119,18 @@ service cloud.firestore {
     }
 
     function isValidPersistedRole(role) {
-      return role in ['customer', 'dealer', 'sales', 'accounts', 'operations', 'management', 'admin'];
+      return role in [
+        'customer',
+        'dealer',
+        'sales',
+        'sales_manager',
+        'accounts',
+        'operations',
+        'hr',
+        'it',
+        'management',
+        'admin'
+      ];
     }
 
     function isValidPublicRegistrationRole(role) {
@@ -135,42 +186,118 @@ service cloud.firestore {
         data.milestone == 'received';
     }
 
+    function isValidFinanceRecord(data) {
+      return data.type in ['invoice', 'payment', 'expense'] &&
+        isNonEmptyString(data.referenceCode, 40) &&
+        isNonEmptyString(data.counterpartyName, 120) &&
+        isNonEmptyString(data.category, 80) &&
+        isNonNegativeNumber(data.amountUsd) &&
+        data.amountUsd <= 50000000 &&
+        isValidCurrency(data.currency) &&
+        data.status in ['paid', 'pending', 'overdue', 'reconciled'] &&
+        data.reconciled is bool &&
+        isNonEmptyString(data.transactionDate, 32) &&
+        isOptionalString(data.notes, 800);
+    }
+
+    function isValidHrEmployee(data) {
+      return isNonEmptyString(data.employeeCode, 32) &&
+        isNonEmptyString(data.fullName, 100) &&
+        isOptionalString(data.email, 120) &&
+        isNonEmptyString(data.department, 60) &&
+        isNonEmptyString(data.jobTitle, 80) &&
+        data.status in ['active', 'on_leave', 'inactive'] &&
+        isNonNegativeNumber(data.baseSalaryUsd) &&
+        data.baseSalaryUsd <= 1000000 &&
+        data.performanceRating is number && data.performanceRating >= 1 && data.performanceRating <= 5;
+    }
+
+    function isValidHrLeaveRequest(data) {
+      return isNonEmptyString(data.employeeName, 100) &&
+        data.leaveType in ['annual', 'sick', 'personal', 'unpaid'] &&
+        isNonEmptyString(data.startDate, 32) &&
+        isNonEmptyString(data.endDate, 32) &&
+        data.days is number && data.days >= 1 && data.days <= 90 &&
+        data.status in ['pending', 'approved', 'rejected'] &&
+        isOptionalString(data.reason, 500);
+    }
+
+    function isValidTeamTask(data) {
+      return isNonEmptyString(data.title, 140) &&
+        isOptionalString(data.description, 800) &&
+        isNonEmptyString(data.department, 60) &&
+        data.priority in ['low', 'medium', 'high', 'urgent'] &&
+        data.status in ['todo', 'in_progress', 'review', 'done'];
+    }
+
+    function isValidSalesTarget(data) {
+      return isNonEmptyString(data.staffName, 100) &&
+        isNonEmptyString(data.period, 40) &&
+        isNonNegativeNumber(data.targetRevenueUsd) &&
+        isNonNegativeNumber(data.achievedRevenueUsd) &&
+        isNonNegativeNumber(data.targetUnits) &&
+        isNonNegativeNumber(data.soldUnits) &&
+        data.commissionRatePct is number && data.commissionRatePct >= 0 && data.commissionRatePct <= 35;
+    }
+
+    function bankingFieldsUnchanged() {
+      return request.resource.data.bankName == resource.data.bankName &&
+        request.resource.data.bankBranch == resource.data.bankBranch &&
+        request.resource.data.accountName == resource.data.accountName &&
+        request.resource.data.accountNumber == resource.data.accountNumber &&
+        request.resource.data.swiftCode == resource.data.swiftCode &&
+        request.resource.data.bankAddress == resource.data.bankAddress;
+    }
+
     // =========================================================================
-    // 1. User Profiles & Role Registry
+    // 1. User Profiles & Granular Role/Permission Registry
     // =========================================================================
 
     match /users/{uid} {
-      allow get: if isOwner(uid) || isStaff();
+      allow get: if isValidId(uid) && (isOwner(uid) || isStaff());
       allow list: if isStaff();
 
-      // Self-registration strictly restricted to customer or dealer role (never staff/admin)
-      allow create: if (
-        isOwner(uid) &&
-        isValidPublicRegistrationRole(request.resource.data.role) &&
-        request.resource.data.uid == uid &&
-        isNonEmptyString(request.resource.data.email, 160) &&
-        isNonEmptyString(request.resource.data.displayName, 120)
-      ) || (
-        isManagement() &&
-        isValidPersistedRole(request.resource.data.role)
+      // Self-registration strictly restricted to customer or dealer role (never staff/admin/custom permissions)
+      allow create: if isValidId(uid) && (
+        (
+          isOwner(uid) &&
+          isValidPublicRegistrationRole(request.resource.data.role) &&
+          request.resource.data.uid == uid &&
+          !('permissions' in request.resource.data) &&
+          isNonEmptyString(request.resource.data.email, 160) &&
+          isNonEmptyString(request.resource.data.displayName, 120)
+        ) || (
+          canAccessModule('users', 'create', isAdmin()) &&
+          isValidPersistedRole(request.resource.data.role)
+        )
       );
 
-      // Users can update profile details, but CANNOT self-escalate role or verified flag
-      allow update: if (
-        isOwner(uid) &&
-        request.resource.data.uid == resource.data.uid &&
-        request.resource.data.role == resource.data.role &&
-        request.resource.data.verified == resource.data.verified
-      ) || (
-        isManagement() &&
-        isValidPersistedRole(request.resource.data.role)
+      // Users can update profile details, but CANNOT self-escalate role, verified flag, or permissions
+      allow update: if isValidId(uid) && (
+        (
+          isOwner(uid) &&
+          request.resource.data.uid == resource.data.uid &&
+          request.resource.data.role == resource.data.role &&
+          request.resource.data.verified == resource.data.verified &&
+          (!('permissions' in request.resource.data) || request.resource.data.permissions == resource.data.permissions)
+        ) || (
+          canAccessModule('users', 'edit', isManagement()) &&
+          isValidPersistedRole(request.resource.data.role) &&
+          // Only Owner / Super Admin can assign admin role or edit custom permissions map
+          (
+            isAdmin() || (
+              request.resource.data.role != 'admin' &&
+              (!('permissions' in request.resource.data) || request.resource.data.permissions == resource.data.permissions)
+            )
+          )
+        )
       );
 
-      allow delete: if isAdmin();
+      allow delete: if isValidId(uid) && isAdmin();
     }
 
     match /admins/{uid} {
-      allow get: if isOwner(uid) || isAdmin();
+      allow get: if isValidId(uid) && (isOwner(uid) || isAdmin());
       allow list, create, update, delete: if isAdmin();
     }
 
@@ -180,9 +307,14 @@ service cloud.firestore {
 
     match /vehicles/{vehicleId} {
       allow read: if true;
-      allow create: if isOperations() && isValidVehicle(request.resource.data);
-      allow update: if isOperations() && isValidVehicle(request.resource.data);
-      allow delete: if isAdmin();
+      allow create: if isValidId(vehicleId) &&
+        canAccessModule('inventory', 'create', isOperations()) &&
+        isValidVehicle(request.resource.data);
+      allow update: if isValidId(vehicleId) &&
+        canAccessModule('inventory', 'edit', isOperations()) &&
+        isValidVehicle(request.resource.data);
+      allow delete: if isValidId(vehicleId) &&
+        canAccessModule('inventory', 'delete', isAdmin());
     }
 
     // =========================================================================
@@ -193,8 +325,8 @@ service cloud.firestore {
       allow get, list: if isStaff() ||
         (isSignedIn() && resource.data.customerId == request.auth.uid);
 
-      allow create: if isSignedIn() && (
-        isStaff() ||
+      allow create: if isValidId(reqId) && isSignedIn() && (
+        canAccessModule('auctions', 'create', isSales() || isOperations()) ||
         (
           request.resource.data.customerId == request.auth.uid &&
           request.resource.data.status == 'new' &&
@@ -207,15 +339,18 @@ service cloud.firestore {
         )
       );
 
-      allow update: if isSales() || isOperations() || (
-        isSignedIn() &&
-        resource.data.customerId == request.auth.uid &&
-        request.resource.data.customerId == resource.data.customerId &&
-        resource.data.status == 'new' &&
-        request.resource.data.status == 'new'
+      allow update: if isValidId(reqId) && (
+        canAccessModule('auctions', 'edit', isSales() || isOperations()) ||
+        (
+          isSignedIn() &&
+          resource.data.customerId == request.auth.uid &&
+          request.resource.data.customerId == resource.data.customerId &&
+          resource.data.status == 'new' &&
+          request.resource.data.status == 'new'
+        )
       );
 
-      allow delete: if isAdmin();
+      allow delete: if isValidId(reqId) && isAdmin();
     }
 
     // =========================================================================
@@ -226,25 +361,29 @@ service cloud.firestore {
       allow get, list: if isStaff() ||
         (isSignedIn() && resource.data.customerId == request.auth.uid);
 
-      allow create: if isSales() &&
+      allow create: if isValidId(quoteId) &&
+        canAccessModule('sales', 'create', isSales()) &&
         isNonEmptyString(request.resource.data.quoteNumber, 40) &&
         isNonEmptyString(request.resource.data.customerId, 128) &&
         isNonNegativeNumber(request.resource.data.totalCifUsd) &&
         isNonNegativeNumber(request.resource.data.authorizedMaxBidUsd) &&
         isValidCurrency(request.resource.data.currency);
 
-      allow update: if isSales() || isAccounts() || (
-        isSignedIn() &&
-        resource.data.customerId == request.auth.uid &&
-        resource.data.status == 'sent' &&
-        request.resource.data.status in ['approved', 'declined'] &&
-        request.resource.data.totalCifUsd == resource.data.totalCifUsd &&
-        request.resource.data.authorizedMaxBidUsd == resource.data.authorizedMaxBidUsd &&
-        request.resource.data.customerId == resource.data.customerId &&
-        request.resource.data.quoteNumber == resource.data.quoteNumber
+      allow update: if isValidId(quoteId) && (
+        canAccessModule('sales', 'edit', isSales() || isAccounts()) ||
+        (
+          isSignedIn() &&
+          resource.data.customerId == request.auth.uid &&
+          resource.data.status == 'sent' &&
+          request.resource.data.status in ['approved', 'declined'] &&
+          request.resource.data.totalCifUsd == resource.data.totalCifUsd &&
+          request.resource.data.authorizedMaxBidUsd == resource.data.authorizedMaxBidUsd &&
+          request.resource.data.customerId == resource.data.customerId &&
+          request.resource.data.quoteNumber == resource.data.quoteNumber
+        )
       );
 
-      allow delete: if isAdmin();
+      allow delete: if isValidId(quoteId) && isAdmin();
     }
 
     // =========================================================================
@@ -255,7 +394,8 @@ service cloud.firestore {
       allow get, list: if isStaff() ||
         (isSignedIn() && resource.data.customerId == request.auth.uid);
 
-      allow create: if isStaff() &&
+      allow create: if isValidId(orderId) &&
+        canAccessModule('orders', 'create', isSales() || isOperations()) &&
         isNonEmptyString(request.resource.data.orderNumber, 40) &&
         isNonEmptyString(request.resource.data.customerId, 128) &&
         isNonNegativeNumber(request.resource.data.authorizedMaxBidUsd) &&
@@ -265,14 +405,15 @@ service cloud.firestore {
           request.resource.data.placedBidUsd <= request.resource.data.authorizedMaxBidUsd
         );
 
-      allow update: if isStaff() &&
+      allow update: if isValidId(orderId) &&
+        canAccessModule('orders', 'edit', isOperations() || isSalesManager() || isAccounts()) &&
         isNonNegativeNumber(request.resource.data.placedBidUsd) &&
         (
           request.resource.data.authorizedMaxBidUsd == 0 ||
           request.resource.data.placedBidUsd <= request.resource.data.authorizedMaxBidUsd
         );
 
-      allow delete: if isAdmin();
+      allow delete: if isValidId(orderId) && isAdmin();
     }
 
     // =========================================================================
@@ -286,7 +427,7 @@ service cloud.firestore {
         resource.data.isInternalStaffOnly == false
       );
 
-      allow create: if isSignedIn() &&
+      allow create: if isValidId(msgId) && isSignedIn() &&
         isNonEmptyString(request.resource.data.orderId, 80) &&
         isNonEmptyString(request.resource.data.body, 2000) &&
         request.resource.data.senderUid == request.auth.uid &&
@@ -298,7 +439,7 @@ service cloud.firestore {
           )
         );
 
-      allow update, delete: if isAdmin();
+      allow update, delete: if isValidId(msgId) && isAdmin();
     }
 
     // =========================================================================
@@ -312,33 +453,37 @@ service cloud.firestore {
         resource.data.isCustomerVisible == true
       );
 
-      allow create, update: if isStaff() &&
+      allow create, update: if isValidId(docId) &&
+        canAccessModule('documents', 'create', isOperations() || isSalesManager() || isAccounts()) &&
         isNonEmptyString(request.resource.data.orderId, 80) &&
         isNonEmptyString(request.resource.data.title, 140) &&
         isNonEmptyString(request.resource.data.fileName, 160);
 
-      allow delete: if isOperations();
+      allow delete: if isValidId(docId) &&
+        canAccessModule('documents', 'delete', isOperations());
     }
 
     // =========================================================================
-    // 8. Audit Logs
+    // 8. Immutable Audit Logs
     // =========================================================================
 
     match /auditLogs/{logId} {
-      allow get, list: if isStaff();
-      allow create: if isSignedIn() &&
+      allow get, list: if canAccessModule('settings', 'view', isManagement() || isIt() || isAccounts());
+      allow create: if isValidId(logId) && isSignedIn() &&
         isNonEmptyString(request.resource.data.action, 80) &&
         isNonEmptyString(request.resource.data.summary, 400);
       allow update, delete: if false;
     }
 
     // =========================================================================
-    // 9. Public Inquiries, Tracking & Company Settings
+    // 9. Public Inquiries, Tracking & Protected Company / Banking Settings
     // =========================================================================
 
     match /inquiries/{inquiryId} {
-      allow create: if isValidPublicInquiry(request.resource.data);
-      allow read, update, delete: if isStaff();
+      allow create: if isValidId(inquiryId) && isValidPublicInquiry(request.resource.data);
+      allow get, list: if isStaff();
+      allow update: if isValidId(inquiryId) && canAccessModule('crm', 'edit', isSales() || isOperations());
+      allow delete: if isValidId(inquiryId) && canAccessModule('crm', 'delete', isAdmin());
     }
 
     match /orderStatus/{trackingCode} {
@@ -351,7 +496,15 @@ service cloud.firestore {
     match /companySettings/{docId} {
       allow get: if docId in ['public', 'exportProfile'] || isStaff();
       allow list: if isStaff();
-      allow create, update, delete: if isManagement();
+      // Creating or modifying banking fields is strictly restricted to Owner/Super Admin or explicit banking:edit
+      allow create: if isAdmin() || hasExplicitPerm('banking', 'edit');
+      allow update: if isAdmin() ||
+        hasExplicitPerm('banking', 'edit') ||
+        (
+          canAccessModule('settings', 'edit', isManagement() || isIt()) &&
+          bankingFieldsUnchanged()
+        );
+      allow delete: if isAdmin();
     }
 
     // =========================================================================
@@ -361,13 +514,13 @@ service cloud.firestore {
     match /landingContent/{docId} {
       allow get: if docId == 'public' || isStaff();
       allow list: if isStaff();
-      allow create, update, delete: if isManagement();
+      allow create, update, delete: if canAccessModule('cms', 'edit', isManagement() || isIt());
     }
 
     match /testimonials/{testimonialId} {
-      // Only approved reviews are visible publicly; staff can review drafts
       allow get, list: if resource.data.approved == true || isStaff();
-      allow create, update: if isManagement() &&
+      allow create, update: if isValidId(testimonialId) &&
+        canAccessModule('cms', 'edit', isManagement()) &&
         isNonEmptyString(request.resource.data.customerName, 100) &&
         isNonEmptyString(request.resource.data.country, 80) &&
         isNonEmptyString(request.resource.data.vehiclePurchased, 120) &&
@@ -376,7 +529,84 @@ service cloud.firestore {
         request.resource.data.rating >= 1 &&
         request.resource.data.rating <= 5 &&
         request.resource.data.approved is bool;
-      allow delete: if isManagement();
+      allow delete: if isValidId(testimonialId) && canAccessModule('cms', 'delete', isManagement());
+    }
+
+    // =========================================================================
+    // 11. Accounts & Finance Ledger (Backend Enforced)
+    // =========================================================================
+
+    match /financeRecords/{recordId} {
+      allow get, list: if canAccessModule('accounts', 'view', isAccounts() || isSalesManager());
+      allow create: if isValidId(recordId) &&
+        canAccessModule('accounts', 'create', isAccounts()) &&
+        isValidFinanceRecord(request.resource.data);
+      allow update: if isValidId(recordId) &&
+        canAccessModule('accounts', 'edit', isAccounts()) &&
+        isValidFinanceRecord(request.resource.data);
+      allow delete: if isValidId(recordId) &&
+        canAccessModule('accounts', 'delete', isAdmin());
+    }
+
+    // =========================================================================
+    // 12. Human Resources — Employees & Leave Approvals (Backend Enforced)
+    // =========================================================================
+
+    match /hrEmployees/{empId} {
+      allow get, list: if canAccessModule('hr', 'view', isHr() || isAccounts());
+      allow create: if isValidId(empId) &&
+        canAccessModule('hr', 'create', isHr()) &&
+        isValidHrEmployee(request.resource.data);
+      allow update: if isValidId(empId) &&
+        canAccessModule('hr', 'edit', isHr()) &&
+        isValidHrEmployee(request.resource.data);
+      allow delete: if isValidId(empId) &&
+        canAccessModule('hr', 'delete', isAdmin() || userRole() == 'hr');
+    }
+
+    match /hrLeaveRequests/{reqId} {
+      allow get, list: if canAccessModule('hr', 'view', isHr());
+      allow create: if isValidId(reqId) &&
+        isStaff() &&
+        request.resource.data.status == 'pending' &&
+        isValidHrLeaveRequest(request.resource.data);
+      allow update: if isValidId(reqId) &&
+        canAccessModule('hr', 'approve', isHr()) &&
+        isValidHrLeaveRequest(request.resource.data);
+      allow delete: if isValidId(reqId) && isAdmin();
+    }
+
+    // =========================================================================
+    // 13. Employee Task Management & Internal Team Messaging
+    // =========================================================================
+
+    match /teamTasks/{taskId} {
+      allow get, list: if isStaff();
+      allow create: if isValidId(taskId) && isStaff() && isValidTeamTask(request.resource.data);
+      allow update: if isValidId(taskId) && isStaff() && isValidTeamTask(request.resource.data);
+      allow delete: if isValidId(taskId) && (isManagement() || hasExplicitPerm('reports', 'delete'));
+    }
+
+    match /teamMessages/{msgId} {
+      allow get, list: if isStaff();
+      allow create: if isValidId(msgId) &&
+        isStaff() &&
+        request.resource.data.senderUid == request.auth.uid &&
+        request.resource.data.channel in ['general', 'sales', 'operations', 'accounts', 'management'] &&
+        isNonEmptyString(request.resource.data.body, 1500);
+      allow update, delete: if isValidId(msgId) && isAdmin();
+    }
+
+    // =========================================================================
+    // 14. Sales Targets & Commission Plans
+    // =========================================================================
+
+    match /salesTargets/{targetId} {
+      allow get, list: if isStaff();
+      allow create, update: if isValidId(targetId) &&
+        canAccessModule('sales', 'approve', isSalesManager()) &&
+        isValidSalesTarget(request.resource.data);
+      allow delete: if isValidId(targetId) && canAccessModule('sales', 'delete', isManagement());
     }
   }
 }

@@ -14,6 +14,7 @@ import { UniversalLoginModal } from './components/UniversalLoginModal';
 import { VehicleDetailModal } from './components/VehicleDetailModal';
 import { WorkflowStatusModal } from './components/WorkflowStatusModal';
 import { DEFAULT_LANDING_CONTENT } from './data/landingDefaults';
+import { hasModulePermission, isStaffRole } from './data/permissions';
 import { calculateCif } from './data/ports';
 import {
   DEFAULT_COMPANY_SETTINGS,
@@ -37,38 +38,59 @@ import {
   clearSampleTradeData,
   convertQuotationToOrder,
   createExportDocument,
+  createFinanceRecord,
+  createHrLeaveRequest,
   createQuotation,
   createSourcingRequest,
+  createTeamTask,
   deleteExportDocument,
+  deleteFinanceRecord,
+  deleteHrEmployee,
+  deleteSalesTarget,
+  deleteTeamTask,
   deleteTestimonial,
   deleteVehicle,
   getUserProfile,
   placeAuctionBidWithGuard,
   postOrderMessage,
+  postTeamChannelMessage,
   recordAuditLog,
   registerCustomerProfile,
   respondToQuotation,
+  reviewHrLeaveRequest,
+  saveBankingDetailsProtected,
   saveCompanySettings,
+  saveHrEmployee,
   saveLandingContent,
+  saveSalesTarget,
   saveTestimonial,
   seedFullTradeDatabase,
   submitBuyerInquiry,
   subscribeAuditLogs,
   subscribeCompanySettings,
   subscribeDocuments,
+  subscribeFinanceRecords,
+  subscribeHrEmployees,
+  subscribeHrLeaveRequests,
   subscribeInquiries,
   subscribeLandingContent,
   subscribeOrderMessages,
   subscribeOrders,
   subscribeQuotations,
+  subscribeSalesTargets,
   subscribeSourcingRequests,
+  subscribeTeamMessages,
+  subscribeTeamTasks,
   subscribeTestimonials,
   subscribeUsers,
   subscribeVehicles,
   toggleDocumentVisibility,
   updateCustomerProfile,
+  updateFinanceRecordStatus,
+  updateInquiryStaff,
   updateOrderLogistics,
   updateSourcingRequestStaff,
+  updateTeamTaskStatus,
   updateVehicleStatus,
 } from './services/firestoreService';
 import type {
@@ -80,15 +102,21 @@ import type {
   CustomerTestimonial,
   ExportDocument,
   ExportOrder,
+  FinanceRecord,
+  HrEmployee,
+  HrLeaveRequest,
   Inquiry,
   LandingPageContent,
   LiveExchangeRateState,
   OrderMessage,
   ProformaDraft,
   Quotation,
+  SalesTarget,
   ShippingMethod,
   SourcingOption,
   SourcingRequest,
+  TeamChannelMessage,
+  TeamTask,
   UserProfile,
   UserRole,
   Vehicle,
@@ -123,10 +151,6 @@ function createInvoiceNumber(): string {
 
 function addDaysIso(days: number): string {
   return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
-}
-
-function isStaffRole(role: UserRole): boolean {
-  return ['sales', 'accounts', 'operations', 'management', 'admin'].includes(role);
 }
 
 function isBuyerRole(role: UserRole): boolean {
@@ -180,6 +204,12 @@ export default function App() {
   const [cloudDocs, setCloudDocs] = useState<ExportDocument[]>([]);
   const [cloudAuditLogs, setCloudAuditLogs] = useState<AuditLogEntry[]>([]);
   const [cloudInquiries, setCloudInquiries] = useState<Inquiry[]>([]);
+  const [cloudFinanceRecords, setCloudFinanceRecords] = useState<FinanceRecord[]>([]);
+  const [cloudHrEmployees, setCloudHrEmployees] = useState<HrEmployee[]>([]);
+  const [cloudHrLeaveRequests, setCloudHrLeaveRequests] = useState<HrLeaveRequest[]>([]);
+  const [cloudTeamTasks, setCloudTeamTasks] = useState<TeamTask[]>([]);
+  const [cloudTeamMessages, setCloudTeamMessages] = useState<TeamChannelMessage[]>([]);
+  const [cloudSalesTargets, setCloudSalesTargets] = useState<SalesTarget[]>([]);
 
   // Local fallback datasets for non-populated collections
   const [localUsers, setLocalUsers] = useState<UserProfile[]>(DEMO_USERS);
@@ -355,8 +385,18 @@ export default function App() {
 
   // Role-scoped authenticated Firestore subscriptions
   const realStaff = Boolean(isAuthenticated && isStaffRole(effectiveRole));
-  const realAdmin = Boolean(
-    isAuthenticated && (effectiveRole === 'admin' || effectiveRole === 'management')
+  const canViewAudit = Boolean(
+    realStaff &&
+      (effectiveRole === 'admin' ||
+        effectiveRole === 'management' ||
+        effectiveRole === 'it' ||
+        hasModulePermission(effectiveRole, activeProfile, 'settings', 'view'))
+  );
+  const canViewFinance = Boolean(
+    realStaff && hasModulePermission(effectiveRole, activeProfile, 'accounts', 'view')
+  );
+  const canViewHr = Boolean(
+    realStaff && hasModulePermission(effectiveRole, activeProfile, 'hr', 'view')
   );
   const realCustomerUid =
     isAuthenticated && isBuyerRole(effectiveRole) && firebaseUser ? firebaseUser.uid : null;
@@ -386,12 +426,32 @@ export default function App() {
     if (realStaff) {
       unsubs.push(subscribeUsers(true, setCloudUsers));
       unsubs.push(subscribeInquiries(true, setCloudInquiries));
+      unsubs.push(subscribeTeamTasks(true, setCloudTeamTasks));
+      unsubs.push(subscribeTeamMessages(true, setCloudTeamMessages));
+      unsubs.push(subscribeSalesTargets(true, setCloudSalesTargets));
     } else {
       setCloudUsers([]);
       setCloudInquiries([]);
+      setCloudTeamTasks([]);
+      setCloudTeamMessages([]);
+      setCloudSalesTargets([]);
     }
 
-    if (realAdmin) {
+    if (canViewFinance) {
+      unsubs.push(subscribeFinanceRecords(true, setCloudFinanceRecords));
+    } else {
+      setCloudFinanceRecords([]);
+    }
+
+    if (canViewHr) {
+      unsubs.push(subscribeHrEmployees(true, setCloudHrEmployees));
+      unsubs.push(subscribeHrLeaveRequests(true, setCloudHrLeaveRequests));
+    } else {
+      setCloudHrEmployees([]);
+      setCloudHrLeaveRequests([]);
+    }
+
+    if (canViewAudit) {
       unsubs.push(subscribeAuditLogs(true, setCloudAuditLogs));
     } else {
       setCloudAuditLogs([]);
@@ -400,7 +460,7 @@ export default function App() {
     return () => {
       unsubs.forEach((u) => u());
     };
-  }, [realStaff, realAdmin, realCustomerUid]);
+  }, [realStaff, canViewFinance, canViewHr, canViewAudit, realCustomerUid]);
 
   // Resolved datasets
   const vehicles = useMemo(
@@ -641,30 +701,32 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
-        <Navbar
-          activeView={activeView}
-          currency={currency}
-          selectedCountryCode={selectedCountryCode}
-          selectedPortId={selectedPortId}
-          liveFx={liveFx}
-          landingContent={landingContent}
-          isAuthenticated={isAuthenticated}
-          userRole={effectiveRole}
-          userProfile={activeProfile}
-          onNavigateView={handleNavigateView}
-          onCurrencyChange={handleCurrencyChange}
-          onCountryChange={handleCountryChange}
-          onPortChange={(pid) => handlePortChange(pid)}
-          onRefreshFx={() => void loadExchangeRates(true)}
-          onOpenLogin={() => {
-            setAuthError('');
-            setLoginModalOpen(true);
-          }}
-          onSignOut={() => void handleSignOut()}
-        />
+        {activeView !== 'staff_console' && (
+          <Navbar
+            activeView={activeView}
+            currency={currency}
+            selectedCountryCode={selectedCountryCode}
+            selectedPortId={selectedPortId}
+            liveFx={liveFx}
+            landingContent={landingContent}
+            isAuthenticated={isAuthenticated}
+            userRole={effectiveRole}
+            userProfile={activeProfile}
+            onNavigateView={handleNavigateView}
+            onCurrencyChange={handleCurrencyChange}
+            onCountryChange={handleCountryChange}
+            onPortChange={(pid) => handlePortChange(pid)}
+            onRefreshFx={() => void loadExchangeRates(true)}
+            onOpenLogin={() => {
+              setAuthError('');
+              setLoginModalOpen(true);
+            }}
+            onSignOut={() => void handleSignOut()}
+          />
+        )}
 
         {/* Floating Compare Tray when buyer selects vehicles to compare */}
-        {compareIds.length > 0 && (
+        {activeView !== 'staff_console' && compareIds.length > 0 && (
           <div className="bg-slate-900 text-white border-b border-slate-800 no-print">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex items-center justify-between gap-3 text-xs">
               <div className="flex items-center gap-2">
@@ -917,7 +979,7 @@ export default function App() {
               staffProfile={activeProfile}
               currency={currency}
               settings={effectiveSettings}
-              liveFxRates={liveFx.rates}
+              liveFx={liveFx}
               isLiveFirestoreMode={isLiveFirestoreMode}
               vehicles={vehicles}
               users={users}
@@ -928,12 +990,88 @@ export default function App() {
               documents={documents}
               auditLogs={auditLogs}
               inquiries={cloudInquiries}
+              financeRecords={cloudFinanceRecords}
+              hrEmployees={cloudHrEmployees}
+              hrLeaveRequests={cloudHrLeaveRequests}
+              teamTasks={cloudTeamTasks}
+              teamMessages={cloudTeamMessages}
+              salesTargets={cloudSalesTargets}
               landingContent={landingContent}
               testimonials={testimonials}
+              onRefreshFx={() => void loadExchangeRates(true)}
               onNotify={notify}
+              onExitConsole={() => setActiveView('home')}
+              onSignOut={() => void handleSignOut()}
               onOpenStaffLogin={() => {
                 setAuthError('');
                 setLoginModalOpen(true);
+              }}
+              onUpdateInquiry={async (inquiryId, updates) => {
+                await updateInquiryStaff(inquiryId, updates);
+                notify('Lead status & CRM notes saved');
+              }}
+              onCreateFinanceRecord={async (input) => {
+                await createFinanceRecord(input);
+                notify(`Finance record ${input.referenceCode} saved`);
+              }}
+              onUpdateFinanceStatus={async (id, updates) => {
+                await updateFinanceRecordStatus(id, updates);
+                notify('Finance status updated');
+              }}
+              onDeleteFinanceRecord={async (id) => {
+                await deleteFinanceRecord(id);
+                notify('Finance record deleted');
+              }}
+              onSaveHrEmployee={async (input, existingId) => {
+                await saveHrEmployee(input, existingId);
+                notify(existingId ? 'Employee updated' : `Added ${input.fullName} to HR directory`);
+              }}
+              onDeleteHrEmployee={async (id) => {
+                await deleteHrEmployee(id);
+                notify('Employee record deleted');
+              }}
+              onCreateHrLeave={async (input) => {
+                await createHrLeaveRequest(input);
+                notify('Leave request submitted');
+              }}
+              onReviewHrLeave={async (id, status) => {
+                await reviewHrLeaveRequest(id, status, activeProfile?.displayName || 'HR Manager');
+                notify(`Leave request ${status}`);
+              }}
+              onCreateTeamTask={async (input) => {
+                await createTeamTask(input);
+                notify('Team task created');
+              }}
+              onUpdateTeamTaskStatus={async (id, status) => {
+                await updateTeamTaskStatus(id, status);
+                notify('Task status updated');
+              }}
+              onDeleteTeamTask={async (id) => {
+                await deleteTeamTask(id);
+                notify('Task deleted');
+              }}
+              onPostTeamMessage={async (channel, body) => {
+                if (!activeProfile) return;
+                await postTeamChannelMessage({
+                  channel,
+                  senderUid: activeProfile.uid,
+                  senderName: activeProfile.displayName,
+                  senderRole: activeProfile.role,
+                  body,
+                });
+              }}
+              onSaveSalesTarget={async (input, existingId) => {
+                await saveSalesTarget(input, existingId);
+                notify(`Sales target saved for ${input.staffName}`);
+              }}
+              onDeleteSalesTarget={async (id) => {
+                await deleteSalesTarget(id);
+                notify('Sales target removed');
+              }}
+              onSaveBankingDetails={async (next, verificationReason) => {
+                await saveBankingDetailsProtected(next, verificationReason);
+                setSettings(next);
+                notify('Verified corporate banking details updated & logged to Audit Trail');
               }}
               onSaveLandingContent={async (next) => {
                 await saveLandingContent(next);
@@ -1234,13 +1372,17 @@ export default function App() {
           )}
         </main>
 
-        <Footer
-          landingContent={landingContent}
-          onNavigateView={handleNavigateView}
-          onOpenPolicy={(policy) => setActivePolicy(policy)}
-        />
+        {activeView !== 'staff_console' && (
+          <>
+            <Footer
+              landingContent={landingContent}
+              onNavigateView={handleNavigateView}
+              onOpenPolicy={(policy) => setActivePolicy(policy)}
+            />
 
-        <FloatingUtilities whatsappPhone={landingContent.contactWhatsapp} />
+            <FloatingUtilities whatsappPhone={landingContent.contactWhatsapp} />
+          </>
+        )}
 
         {/* Vehicle Detail Modal */}
         {selectedVehicle && (

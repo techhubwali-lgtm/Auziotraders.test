@@ -4,12 +4,37 @@ export type PersistedUserRole =
   | 'customer'
   | 'dealer'
   | 'sales'
+  | 'sales_manager'
   | 'accounts'
   | 'operations'
+  | 'hr'
+  | 'it'
   | 'management'
   | 'admin';
 
 export type UserRole = 'visitor' | PersistedUserRole;
+
+export type PermissionAction = 'view' | 'create' | 'edit' | 'delete' | 'approve' | 'export';
+
+export type AdminModuleKey =
+  | 'dashboard'
+  | 'crm'
+  | 'sales'
+  | 'inventory'
+  | 'auctions'
+  | 'orders'
+  | 'logistics'
+  | 'accounts'
+  | 'banking'
+  | 'hr'
+  | 'documents'
+  | 'reports'
+  | 'cms'
+  | 'ai'
+  | 'users'
+  | 'settings';
+
+export type RolePermissionsMap = Partial<Record<AdminModuleKey, PermissionAction[]>>;
 
 export type LoginPortalType = 'customer' | 'staff';
 
@@ -236,6 +261,8 @@ export interface UserProfile {
   email: string;
   displayName: string;
   role: PersistedUserRole;
+  department?: string;
+  permissions?: RolePermissionsMap;
   companyName: string;
   country: string;
   defaultPortId: string;
@@ -652,4 +679,109 @@ export interface ProformaDraft {
   consigneePhone: string;
   consigneeEmail: string;
   trackingCode?: string;
+}
+
+// =============================================================================
+// Enterprise Admin Console Modules (Accounts, HR, Tasks, Messaging, Targets)
+// =============================================================================
+
+export type FinanceRecordType = 'invoice' | 'payment' | 'expense';
+export type FinanceRecordStatus = 'paid' | 'pending' | 'overdue' | 'reconciled';
+
+export interface FinanceRecord {
+  id: string;
+  type: FinanceRecordType;
+  referenceCode: string;
+  orderId: string;
+  orderNumber: string;
+  counterpartyName: string;
+  category: string;
+  amountUsd: number;
+  currency: CurrencyCode;
+  status: FinanceRecordStatus;
+  reconciled: boolean;
+  transactionDate: string;
+  notes: string;
+  createdByUid: string;
+  createdByName: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface HrEmployee {
+  id: string;
+  employeeCode: string;
+  fullName: string;
+  email: string;
+  phone: string;
+  department: string;
+  jobTitle: string;
+  status: 'active' | 'on_leave' | 'inactive';
+  baseSalaryUsd: number;
+  commissionRatePct: number;
+  attendanceDaysThisMonth: number;
+  leaveDaysRemaining: number;
+  performanceRating: number;
+  joinedDate: string;
+  notes: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface HrLeaveRequest {
+  id: string;
+  employeeId: string;
+  employeeName: string;
+  department: string;
+  leaveType: 'annual' | 'sick' | 'personal' | 'unpaid';
+  startDate: string;
+  endDate: string;
+  days: number;
+  reason: string;
+  status: 'pending' | 'approved' | 'rejected';
+  reviewedByName: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface TeamTask {
+  id: string;
+  title: string;
+  description: string;
+  department: string;
+  assignedToName: string;
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  status: 'todo' | 'in_progress' | 'review' | 'done';
+  dueDate: string;
+  createdByUid: string;
+  createdByName: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type TeamChannelId = 'general' | 'sales' | 'operations' | 'accounts' | 'management';
+
+export interface TeamChannelMessage {
+  id: string;
+  channel: TeamChannelId;
+  senderUid: string;
+  senderName: string;
+  senderRole: PersistedUserRole;
+  body: string;
+  createdAt?: unknown;
+}
+
+export interface SalesTarget {
+  id: string;
+  staffName: string;
+  staffEmail: string;
+  period: string;
+  targetRevenueUsd: number;
+  achievedRevenueUsd: number;
+  targetUnits: number;
+  soldUnits: number;
+  commissionRatePct: number;
+  notes: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
 }
