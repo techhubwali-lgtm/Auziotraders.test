@@ -12,8 +12,22 @@ import {
 } from './server/auctionProxy';
 import type { AuctionFeedTable, SteeringType } from './src/types/portal';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+function resolveAppDir(): string {
+  if (typeof __dirname !== 'undefined') {
+    return __dirname;
+  }
+  return path.dirname(fileURLToPath(import.meta.url));
+}
+
+function resolveDistDir(): string {
+  const baseDir = resolveAppDir();
+  const candidates = [
+    path.resolve(process.cwd(), 'dist'),
+    path.resolve(baseDir, 'dist'),
+    path.resolve(baseDir, '..', 'dist'),
+  ];
+  return candidates.find((dir) => fs.existsSync(path.join(dir, 'index.html'))) || candidates[0];
+}
 
 const IPV4_REGEX =
   /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
@@ -49,9 +63,15 @@ function extractClientIp(req: express.Request): string {
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3000;
 
   app.disable('x-powered-by');
+  app.set('trust proxy', 1);
+  app.use((_req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    next();
+  });
   app.use(express.json({ limit: '256kb' }));
 
   // ---------------------------------------------------------------------------
@@ -150,7 +170,7 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    const distDir = path.resolve(__dirname, 'dist');
+    const distDir = resolveDistDir();
     app.use(express.static(distDir));
     app.get('*', (_req, res) => {
       const indexFile = path.join(distDir, 'index.html');
