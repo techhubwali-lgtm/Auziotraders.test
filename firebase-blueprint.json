@@ -1,0 +1,430 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Registered customer/dealer or staff/admin profile with RBAC role and verification status.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "email": { "type": "string", "format": "email", "minLength": 5, "maxLength": 120 },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "role": { "type": "string", "enum": ["customer", "sales", "operations", "admin"] },
+        "companyName": { "type": "string", "maxLength": 120 },
+        "country": { "type": "string", "maxLength": 80 },
+        "defaultPortId": { "type": "string", "maxLength": 64 },
+        "phone": { "type": "string", "maxLength": 40 },
+        "consigneeAddress": { "type": "string", "maxLength": 240 },
+        "assignedRepName": { "type": "string", "maxLength": 100 },
+        "assignedRepEmail": { "type": "string", "maxLength": 120 },
+        "verified": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uid", "email", "displayName", "role", "companyName", "country",
+        "defaultPortId", "phone", "consigneeAddress", "assignedRepName",
+        "assignedRepEmail", "verified", "createdAt", "updatedAt"
+      ]
+    },
+    "Vehicle": {
+      "title": "Vehicle",
+      "description": "Japanese used export vehicle listing with physical stock, auction listing, or partner stock classification.",
+      "type": "object",
+      "properties": {
+        "stockCode": { "type": "string", "minLength": 3, "maxLength": 32, "pattern": "^[A-Z0-9-]+$" },
+        "listingType": { "type": "string", "enum": ["auzio_stock", "auction_listing", "partner_stock"] },
+        "auctionDate": { "type": "string", "maxLength": 32 },
+        "make": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "trim": { "type": "string", "maxLength": 60 },
+        "year": { "type": "integer" },
+        "chassisCode": { "type": "string", "minLength": 3, "maxLength": 40 },
+        "mileageKm": { "type": "integer" },
+        "engineCc": { "type": "integer" },
+        "fuelType": { "type": "string", "enum": ["Petrol", "Diesel", "Hybrid", "Electric"] },
+        "transmission": { "type": "string", "enum": ["Automatic", "Manual", "CVT"] },
+        "drivetrain": { "type": "string", "enum": ["2WD", "4WD", "AWD"] },
+        "steering": { "type": "string", "enum": ["RHD", "LHD"] },
+        "exteriorColor": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "bodyType": { "type": "string", "enum": ["SUV", "Pickup", "Sedan", "Hatchback", "Van", "Coupe", "Wagon"] },
+        "originPort": { "type": "string", "enum": ["Yokohama", "Nagoya", "Kobe", "Osaka", "Hakata"] },
+        "volumeM3": { "type": "number" },
+        "fobPriceUsd": { "type": "number" },
+        "status": { "type": "string", "enum": ["available", "reserved", "sold", "archived"] },
+        "featured": { "type": "boolean" },
+        "images": { "type": "array" },
+        "features": { "type": "array" },
+        "auctionReport": { "type": "object" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "stockCode", "listingType", "auctionDate", "make", "model", "trim", "year",
+        "chassisCode", "mileageKm", "engineCc", "fuelType", "transmission", "drivetrain",
+        "steering", "exteriorColor", "bodyType", "originPort", "volumeM3", "fobPriceUsd",
+        "status", "featured", "images", "features", "auctionReport", "createdAt", "updatedAt"
+      ]
+    },
+    "SourcingRequest": {
+      "title": "SourcingRequest",
+      "description": "Guided customer vehicle sourcing request with mandatory maximum bid acknowledgment and staff-prepared auction options.",
+      "type": "object",
+      "properties": {
+        "requestCode": { "type": "string", "minLength": 6, "maxLength": 32 },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "customerName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "customerCompany": { "type": "string", "maxLength": 120 },
+        "assignedStaffId": { "type": "string", "maxLength": 128 },
+        "assignedStaffName": { "type": "string", "maxLength": 100 },
+        "make": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "model": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "yearMin": { "type": "integer" },
+        "yearMax": { "type": "integer" },
+        "mileageMaxKm": { "type": "integer" },
+        "gradePref": { "type": "string", "maxLength": 32 },
+        "engineCc": { "type": "string", "maxLength": 32 },
+        "transmission": { "type": "string", "maxLength": 32 },
+        "fuelType": { "type": "string", "maxLength": 32 },
+        "colorPref": { "type": "string", "maxLength": 40 },
+        "quantity": { "type": "integer" },
+        "maxBudgetUsd": { "type": "number" },
+        "budgetCurrency": { "type": "string", "enum": ["USD", "JPY", "EUR", "AUD", "GBP", "KES", "ZAR", "NZD", "CAD"] },
+        "destinationCountry": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "destinationPortId": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "sourcingChannel": { "type": "string", "enum": ["auction", "stock", "either"] },
+        "referenceLinks": { "type": "string", "maxLength": 500 },
+        "notes": { "type": "string", "maxLength": 1000 },
+        "maxBidAcknowledged": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["new", "options_sent", "quoted", "approved", "closed"] },
+        "options": { "type": "array" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "requestCode", "customerId", "customerName", "customerCompany",
+        "assignedStaffId", "assignedStaffName", "make", "model", "yearMin",
+        "yearMax", "mileageMaxKm", "gradePref", "engineCc", "transmission",
+        "fuelType", "colorPref", "quantity", "maxBudgetUsd", "budgetCurrency",
+        "destinationCountry", "destinationPortId", "sourcingChannel",
+        "referenceLinks", "notes", "maxBidAcknowledged", "status", "options",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "Quotation": {
+      "title": "Quotation",
+      "description": "Itemized export quotation with maximum auction bid ceiling authorization workflow.",
+      "type": "object",
+      "properties": {
+        "quoteNumber": { "type": "string", "minLength": 6, "maxLength": 32 },
+        "sourcingRequestId": { "type": "string", "maxLength": 128 },
+        "vehicleId": { "type": "string", "maxLength": 128 },
+        "vehicleTitle": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "stockCode": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "customerName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "customerCompany": { "type": "string", "maxLength": 120 },
+        "preparedByStaffId": { "type": "string", "maxLength": 128 },
+        "preparedByName": { "type": "string", "maxLength": 100 },
+        "destinationPortId": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "destinationPortName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "currency": { "type": "string", "enum": ["USD", "JPY", "EUR", "AUD", "GBP", "KES", "ZAR", "NZD", "CAD"] },
+        "fobVehicleUsd": { "type": "number" },
+        "auctionFeeUsd": { "type": "number" },
+        "exportDocsUsd": { "type": "number" },
+        "jevicInspectionUsd": { "type": "number" },
+        "seaFreightUsd": { "type": "number" },
+        "marineInsuranceUsd": { "type": "number" },
+        "totalCifUsd": { "type": "number" },
+        "authorizedMaxBidUsd": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "sent", "approved", "declined", "expired"] },
+        "approvedAt": { "type": "string", "maxLength": 40 },
+        "approvedByUid": { "type": "string", "maxLength": 128 },
+        "declineReason": { "type": "string", "maxLength": 400 },
+        "validUntil": { "type": "string", "maxLength": 32 },
+        "notes": { "type": "string", "maxLength": 800 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "quoteNumber", "sourcingRequestId", "vehicleId", "vehicleTitle", "stockCode",
+        "customerId", "customerName", "customerCompany", "preparedByStaffId",
+        "preparedByName", "destinationPortId", "destinationPortName", "currency",
+        "fobVehicleUsd", "auctionFeeUsd", "exportDocsUsd", "jevicInspectionUsd",
+        "seaFreightUsd", "marineInsuranceUsd", "totalCifUsd", "authorizedMaxBidUsd",
+        "status", "approvedAt", "approvedByUid", "declineReason", "validUntil",
+        "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "ExportOrder": {
+      "title": "ExportOrder",
+      "description": "14-stage export order with carrier vessel schedule and server-enforced auction bid ceiling.",
+      "type": "object",
+      "properties": {
+        "orderNumber": { "type": "string", "minLength": 6, "maxLength": 32 },
+        "trackingCode": { "type": "string", "minLength": 8, "maxLength": 32, "pattern": "^AUZ-[A-Z0-9-]+$" },
+        "quotationId": { "type": "string", "maxLength": 128 },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "customerName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "customerCompany": { "type": "string", "maxLength": 120 },
+        "vehicleId": { "type": "string", "maxLength": 128 },
+        "vehicleStockCode": { "type": "string", "minLength": 2, "maxLength": 32 },
+        "vehicleTitle": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "listingType": { "type": "string", "enum": ["auzio_stock", "auction_listing", "partner_stock"] },
+        "destinationCountry": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "destinationPortId": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "destinationPortName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "shippingMethod": { "type": "string", "enum": ["roro", "container_20ft", "container_40ft"] },
+        "fobUsd": { "type": "number" },
+        "freightUsd": { "type": "number" },
+        "inspectionUsd": { "type": "number" },
+        "insuranceUsd": { "type": "number" },
+        "totalCifUsd": { "type": "number" },
+        "currency": { "type": "string", "enum": ["USD", "JPY", "EUR", "AUD", "GBP", "KES", "ZAR", "NZD", "CAD"] },
+        "authorizedMaxBidUsd": { "type": "number" },
+        "placedBidUsd": { "type": "number" },
+        "milestone": {
+          "type": "string",
+          "enum": [
+            "request_received", "options_prepared", "quotation_sent", "customer_approved",
+            "bid_placed", "vehicle_purchased", "payment_pending", "payment_received",
+            "vehicle_in_yard", "export_docs_ready", "shipment_booked", "shipped",
+            "arrived_port", "completed"
+          ]
+        },
+        "vesselName": { "type": "string", "maxLength": 100 },
+        "voyageNumber": { "type": "string", "maxLength": 40 },
+        "blNumber": { "type": "string", "maxLength": 60 },
+        "etdDate": { "type": "string", "maxLength": 32 },
+        "etaDate": { "type": "string", "maxLength": 32 },
+        "scheduleIsEstimate": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "orderNumber", "trackingCode", "quotationId", "customerId", "customerName",
+        "customerCompany", "vehicleId", "vehicleStockCode", "vehicleTitle", "listingType",
+        "destinationCountry", "destinationPortId", "destinationPortName", "shippingMethod",
+        "fobUsd", "freightUsd", "inspectionUsd", "insuranceUsd", "totalCifUsd", "currency",
+        "authorizedMaxBidUsd", "placedBidUsd", "milestone", "vesselName", "voyageNumber",
+        "blNumber", "etdDate", "etaDate", "scheduleIsEstimate", "createdAt", "updatedAt"
+      ]
+    },
+    "OrderMessage": {
+      "title": "OrderMessage",
+      "description": "Order message thread isolating customer-visible correspondence from confidential internal staff notes.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "senderName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "senderRole": { "type": "string", "enum": ["customer", "sales", "operations", "admin"] },
+        "body": { "type": "string", "minLength": 1, "maxLength": 1500 },
+        "isInternalStaffOnly": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "orderId", "customerId", "senderUid", "senderName", "senderRole",
+        "body", "isInternalStaffOnly", "createdAt"
+      ]
+    },
+    "ExportDocument": {
+      "title": "ExportDocument",
+      "description": "Export documentation record with server-enforced customer visibility isolation.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "orderNumber": { "type": "string", "minLength": 3, "maxLength": 32 },
+        "customerId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "title": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "docType": {
+          "type": "string",
+          "enum": [
+            "proforma_invoice", "export_certificate", "bill_of_lading",
+            "auction_sheet", "inspection_report", "commercial_invoice", "internal_cost_sheet"
+          ]
+        },
+        "fileName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "fileUrl": { "type": "string", "maxLength": 200000 },
+        "isCustomerVisible": { "type": "boolean" },
+        "uploadedByName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "notes": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "orderId", "orderNumber", "customerId", "title", "docType", "fileName",
+        "fileUrl", "isCustomerVisible", "uploadedByName", "notes", "createdAt", "updatedAt"
+      ]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Immutable chronological audit trail of bid authorizations, quote updates, logins, and role changes.",
+      "type": "object",
+      "properties": {
+        "actorUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "actorEmail": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "actorRole": { "type": "string", "enum": ["visitor", "customer", "sales", "operations", "admin"] },
+        "action": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "targetType": { "type": "string", "minLength": 2, "maxLength": 40 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "summary": { "type": "string", "minLength": 3, "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["actorUid", "actorEmail", "actorRole", "action", "targetType", "targetId", "summary", "createdAt"]
+    },
+    "Inquiry": {
+      "title": "Inquiry",
+      "description": "Visitor quick inquiry containing buyer PII (staff/admin readable only).",
+      "type": "object",
+      "properties": {
+        "trackingCode": { "type": "string", "minLength": 8, "maxLength": 32, "pattern": "^AUZ-[A-Z0-9-]+$" },
+        "type": { "type": "string", "enum": ["inquiry", "reservation"] },
+        "vehicleId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "vehicleStockCode": { "type": "string", "minLength": 3, "maxLength": 32 },
+        "vehicleTitle": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "buyerName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "buyerEmail": { "type": "string", "format": "email", "minLength": 5, "maxLength": 120 },
+        "buyerPhone": { "type": "string", "minLength": 6, "maxLength": 40 },
+        "buyerCountry": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "destinationPortId": { "type": "string", "minLength": 2, "maxLength": 64 },
+        "destinationPortName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "shippingMethod": { "type": "string", "enum": ["roro", "container_20ft", "container_40ft"] },
+        "includeInsurance": { "type": "boolean" },
+        "fobPriceUsd": { "type": "number" },
+        "freightUsd": { "type": "number" },
+        "inspectionUsd": { "type": "number" },
+        "insuranceUsd": { "type": "number" },
+        "quotedCifUsd": { "type": "number" },
+        "currency": { "type": "string", "enum": ["USD", "JPY", "EUR", "AUD", "GBP", "KES", "ZAR", "NZD", "CAD"] },
+        "message": { "type": "string", "maxLength": 1000 },
+        "status": { "type": "string" },
+        "vesselName": { "type": "string", "maxLength": 100 },
+        "etaDate": { "type": "string", "maxLength": 40 },
+        "adminNotes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "trackingCode", "type", "vehicleId", "vehicleStockCode", "vehicleTitle",
+        "buyerName", "buyerEmail", "buyerPhone", "buyerCountry", "destinationPortId",
+        "destinationPortName", "shippingMethod", "includeInsurance", "fobPriceUsd",
+        "freightUsd", "inspectionUsd", "insuranceUsd", "quotedCifUsd", "currency",
+        "message", "status", "vesselName", "etaDate", "adminNotes", "createdAt", "updatedAt"
+      ]
+    },
+    "OrderStatus": {
+      "title": "OrderStatus",
+      "description": "Public non-PII milestone projection keyed by unpredictable tracking code.",
+      "type": "object",
+      "properties": {
+        "trackingCode": { "type": "string", "minLength": 8, "maxLength": 32, "pattern": "^AUZ-[A-Z0-9-]+$" },
+        "inquiryId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "vehicleStockCode": { "type": "string", "minLength": 3, "maxLength": 32 },
+        "vehicleTitle": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "destinationPortName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "shippingMethod": { "type": "string", "enum": ["roro", "container_20ft", "container_40ft"] },
+        "quotedCifUsd": { "type": "number" },
+        "currency": { "type": "string", "enum": ["USD", "JPY", "EUR", "AUD", "GBP", "KES", "ZAR", "NZD", "CAD"] },
+        "milestone": { "type": "string" },
+        "vesselName": { "type": "string", "maxLength": 100 },
+        "etaDate": { "type": "string", "maxLength": 40 },
+        "publicNote": { "type": "string", "maxLength": 400 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "trackingCode", "inquiryId", "vehicleStockCode", "vehicleTitle",
+        "destinationPortName", "shippingMethod", "quotedCifUsd", "currency",
+        "milestone", "vesselName", "etaDate", "publicNote", "createdAt", "updatedAt"
+      ]
+    },
+    "CompanySettings": {
+      "title": "CompanySettings",
+      "description": "Official Auzio Traders SMBC Tokyo wire details, invoice validity, and 9-currency FX rates.",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "tagline": { "type": "string", "maxLength": 160 },
+        "officeAddress": { "type": "string", "minLength": 5, "maxLength": 240 },
+        "supportEmail": { "type": "string", "format": "email", "minLength": 5, "maxLength": 120 },
+        "whatsappPhone": { "type": "string", "minLength": 6, "maxLength": 40 },
+        "bankName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "bankBranch": { "type": "string", "maxLength": 120 },
+        "accountName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "accountNumber": { "type": "string", "minLength": 4, "maxLength": 60 },
+        "swiftCode": { "type": "string", "minLength": 6, "maxLength": 20 },
+        "bankAddress": { "type": "string", "maxLength": 240 },
+        "invoiceValidityDays": { "type": "integer" },
+        "exchangeRates": { "type": "object" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "companyName", "tagline", "officeAddress", "supportEmail", "whatsappPhone",
+        "bankName", "bankBranch", "accountName", "accountNumber", "swiftCode",
+        "bankAddress", "invoiceValidityDays", "exchangeRates", "updatedAt"
+      ]
+    },
+    "AdminUser": {
+      "title": "AdminUser",
+      "description": "Admin role registry.",
+      "type": "object",
+      "properties": {
+        "email": { "type": "string", "format": "email", "minLength": 5, "maxLength": 120 },
+        "role": { "type": "string", "enum": ["admin", "super_admin"] },
+        "addedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["email", "role", "addedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Customer/dealer and staff/admin user profiles enforcing RBAC and verification."
+    },
+    "/vehicles/{vehicleId}": {
+      "schema": { "$ref": "#/entities/Vehicle" },
+      "description": "Publicly browsable physical stock, auction listings, and partner stock."
+    },
+    "/sourcingRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/SourcingRequest" },
+      "description": "Guided buyer sourcing requests isolated to owning customer and staff."
+    },
+    "/quotations/{quotationId}": {
+      "schema": { "$ref": "#/entities/Quotation" },
+      "description": "Itemized export quotations and customer maximum bid authorizations."
+    },
+    "/orders/{orderId}": {
+      "schema": { "$ref": "#/entities/ExportOrder" },
+      "description": "14-stage export orders with vessel logistics and bid ceiling guard."
+    },
+    "/orderMessages/{messageId}": {
+      "schema": { "$ref": "#/entities/OrderMessage" },
+      "description": "Order correspondence enforcing strict separation of internal staff notes."
+    },
+    "/documents/{docId}": {
+      "schema": { "$ref": "#/entities/ExportDocument" },
+      "description": "Export document vault enforcing isCustomerVisible isolation."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable chronological audit trail readable only by administrators."
+    },
+    "/inquiries/{inquiryId}": {
+      "schema": { "$ref": "#/entities/Inquiry" },
+      "description": "Public visitor inquiries with PII isolated to staff/admins."
+    },
+    "/orderStatus/{trackingCode}": {
+      "schema": { "$ref": "#/entities/OrderStatus" },
+      "description": "Public non-PII tracking lookup keyed by reference code."
+    },
+    "/companySettings/{settingId}": {
+      "schema": { "$ref": "#/entities/CompanySettings" },
+      "description": "Official SMBC Tokyo wire details and multi-currency exchange rates."
+    },
+    "/admins/{adminUid}": {
+      "schema": { "$ref": "#/entities/AdminUser" },
+      "description": "Administrator registry."
+    }
+  }
+}

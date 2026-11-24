@@ -1,0 +1,6 @@
+{
+  "name": "Auzio Traders - Global Used Vehicle Export Portal",
+  "description": "Comprehensive international vehicle trading and export portal for Auzio Traders, featuring Japanese & global car stock, CIF ocean freight calculator, instant proforma invoice generation, and easy-to-use inventory management.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
