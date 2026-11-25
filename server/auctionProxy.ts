@@ -938,6 +938,8 @@ interface RawAucLot {
   r?: string;
   s?: string;
   t?: string;
+  u?: string;
+  v?: string;
   w?: string;
   x?: string;
   y?: string;
@@ -1101,6 +1103,11 @@ function normalizeProxyLotToVehicle(
   const linkPrefix = raw.j1 === 'aj' || raw.j1 === 'st' ? raw.j1 : table === 'stats' ? 'st' : 'aj';
   const sourceUrl = `${AUC_BASE_ORIGIN}/${linkPrefix}-${lotId}.htm`;
   const todayIso = new Date().toISOString().slice(0, 10);
+  const rawAuctionStatus = stripHtmlTags(raw.v || '').trim().slice(0, 30);
+  const auctionStatus =
+    rawAuctionStatus || (table === 'stats' && raw.u === '1' ? 'sold' : table === 'stats' ? 'sold' : '');
+  const isSoldLot =
+    table === 'stats' || auctionStatus.toLowerCase().includes('sold') || raw.u === '1';
 
   return {
     id: `auc-${lotId}`,
@@ -1123,7 +1130,7 @@ function normalizeProxyLotToVehicle(
     originPort,
     volumeM3,
     fobPriceUsd,
-    status: 'available',
+    status: isSoldLot ? 'sold' : 'available',
     featured: exteriorGrade === '5' || exteriorGrade === '4.5' || exteriorGrade === 'S',
     images: mediumImages,
     features,
@@ -1132,10 +1139,11 @@ function normalizeProxyLotToVehicle(
       interiorGrade: exteriorGrade === '5' || exteriorGrade === 'S' ? 'A' : 'B',
       auctionHouse,
       lotNumber,
-      inspectionDate: todayIso,
+      inspectionDate: auctionDateRaw || todayIso,
       inspectorNotes:
-        `Live Japanese auction lot streamed from auc.auziotraders.com (${auctionHouse}, Lot #${lotNumber}${auctionDateRaw ? ` on ${auctionDateRaw}` : ''}). ` +
-        `Full Japanese auction sheet translation & physical pre-bid yard check performed by AUZIO TRADERS Yokohama staff upon Maximum Bid Ceiling request.`,
+        table === 'stats'
+          ? `Historical Japanese sold auction result from auc.auziotraders.com (${auctionHouse}, Lot #${lotNumber}${auctionDateRaw ? ` on ${auctionDateRaw}` : ''}, Status: ${auctionStatus || 'Sold'}). Use this benchmark to calibrate your Maximum Bid Ceiling.`
+          : `Live Japanese auction lot streamed from auc.auziotraders.com (${auctionHouse}, Lot #${lotNumber}${auctionDateRaw ? ` on ${auctionDateRaw}` : ''}). Full Japanese auction sheet translation & physical pre-bid yard check performed by AUZIO TRADERS Yokohama staff upon Maximum Bid Ceiling request.`,
       mechanicalStatus: {
         engine: 'Pending AUZIO pre-bid translation & yard check',
         transmission: `${raw.k ? `${raw.k} ` : ''}${transmission} — auction house spec`,
@@ -1158,6 +1166,7 @@ function normalizeProxyLotToVehicle(
       auctionHouse,
       auctionDate: auctionDateRaw,
       auctionTime: auctionTimeRaw,
+      auctionStatus: auctionStatus || undefined,
       rawStartPriceJpy: startJpy,
       rawAvgPriceJpy: avgJpy,
       rawFinishPriceJpy: finishJpy,
@@ -1608,23 +1617,29 @@ export async function searchLiveAuctions(
     }
 
     const ts = `${Date.now()}0`;
+    const isStatsTable = table === 'stats';
+    const loaderPath = isStatsTable ? 'st?file=loader' : 'aj_neo?file=loader';
+    const refererUrl = isStatsTable ? `${AUC_BASE_ORIGIN}/st` : `${AUC_BASE_ORIGIN}/`;
+
     const formBody = new URLSearchParams({
-      url_loader: 'aj_neo?file=loader',
+      url_loader: loaderPath,
       page: String(page),
-      sort_ord: 'year#desc',
+      // Default sort on /st returns 30+ unlocked sold records per page; year#desc puts locked rows first
+      sort_ord: isStatsTable ? '' : 'year#desc',
       url_luboy: 'Any',
       url_lubaya: 'Any',
       lose_time_here_buT_not_buy_servlce_for_100_usd_monthly_here_http_avto_jp:
         'http://avto.jp/specification.html',
       tpl: '',
       edit_post: '',
-      is_stat: table === 'stats' ? '1' : '0',
+      // Note: on auc.auziotraders.com, is_stat=1 selects Favorites List A (empty for guests), NOT sold stats
+      is_stat: '0',
       vendor: vendorId,
       model: upstreamModel,
       bid: lotClean,
       kuzov: chassisClean,
       rate: gradeClean,
-      status: '',
+      status: isStatsTable ? 'sold' : '',
       kpp_add: '',
       colour: '',
       auct_name: auctionClean,
@@ -1634,13 +1649,13 @@ export async function searchLiveAuctions(
     });
 
     const loaderRes = await fetch(
-      `${AUC_BASE_ORIGIN}/aj_neo?file=loader&ajx=${encodeURIComponent(ts)}-xml`,
+      `${AUC_BASE_ORIGIN}/${loaderPath}&ajx=${encodeURIComponent(ts)}-xml`,
       {
         method: 'POST',
         headers: {
           'User-Agent': USER_AGENT,
           'Content-Type': 'application/x-www-form-urlencoded',
-          Referer: `${AUC_BASE_ORIGIN}/`,
+          Referer: refererUrl,
           Origin: AUC_BASE_ORIGIN,
           ...(meta.cookies ? { Cookie: meta.cookies } : {}),
         },
