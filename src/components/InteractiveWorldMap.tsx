@@ -1,229 +1,369 @@
-import { geoGraticule10, geoNaturalEarth1, geoPath } from 'd3-geo';
-import type { Feature, FeatureCollection, Geometry, LineString } from 'geojson';
-import { Anchor } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { feature } from 'topojson-client';
-import type { GeometryCollection, Topology } from 'topojson-specification';
-import worldAtlasRaw from 'world-atlas/countries-110m.json';
+import {
+  AdvancedMarker,
+  APIProvider,
+  InfoWindow,
+  Map as GoogleMap,
+  useAdvancedMarkerRef,
+  useMap,
+  useMapsLibrary,
+} from '@vis.gl/react-google-maps';
+import {
+  Anchor,
+  Globe,
+  Layers,
+  Map as MapIcon,
+  Maximize2,
+  Mountain,
+  Satellite,
+} from 'lucide-react';
+import { useCallback, useEffect, useState } from 'react';
+
+// Modern Google Maps Platform React implementation for Global Shipping Network
+// Ref: https://developers.google.com/maps/documentation/javascript/advanced-markers/overview?utm_campaign=gmp_mcp_codeassist_v1_aistudio
+
+const GOOGLE_MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim();
+const DEFAULT_CENTER = { lat: 14, lng: 82 };
+const DEFAULT_ZOOM = 2;
+
+type GoogleMapTypeId = 'hybrid' | 'satellite' | 'terrain' | 'roadmap';
+
+interface LatLngPoint {
+  lat: number;
+  lng: number;
+}
 
 interface CorridorNode {
   id: string;
   countryCode: string;
-  isoNumeric: string;
   portId: string;
   label: string;
   shortLabel: string;
   unLocode: string;
   transit: string;
-  coords: [number, number]; // [lon, lat]
-  seaRoute: [number, number][]; // Real maritime waypoints from Yokohama
-  labelDx: number;
-  labelDy: number;
-  labelAnchor: 'start' | 'end' | 'middle';
+  position: LatLngPoint;
+  seaRoute: LatLngPoint[];
 }
 
-const JAPAN_ISO_NUMERIC = '392';
-const JAPAN_COORDS: [number, number] = [139.638, 35.4437]; // Yokohama (JPYOK)
+const JAPAN_HUB: LatLngPoint = { lat: 35.4437, lng: 139.638 }; // Yokohama (JPYOK)
 
 const CORRIDOR_NODES: CorridorNode[] = [
   {
     id: 'mombasa',
     countryCode: 'KE',
-    isoNumeric: '404',
     portId: 'mombasa-ke',
     label: 'Mombasa, Kenya',
     shortLabel: 'Mombasa',
     unLocode: 'KEMBA',
     transit: '24–30 days',
-    coords: [39.6682, -4.0435],
+    position: { lat: -4.0435, lng: 39.6682 },
     seaRoute: [
-      JAPAN_COORDS,
-      [126, 24],
-      [115, 13],
-      [104, 1.3],
-      [94, 5.5],
-      [76, 3.5],
-      [56, -0.5],
-      [39.6682, -4.0435],
+      JAPAN_HUB,
+      { lat: 24, lng: 126 },
+      { lat: 13, lng: 115 },
+      { lat: 1.3, lng: 104 },
+      { lat: 5.5, lng: 94 },
+      { lat: 3.5, lng: 76 },
+      { lat: -0.5, lng: 56 },
+      { lat: -4.0435, lng: 39.6682 },
     ],
-    labelDx: 9,
-    labelDy: -4,
-    labelAnchor: 'start',
   },
   {
     id: 'dar',
     countryCode: 'TZ',
-    isoNumeric: '834',
     portId: 'dar-es-salaam-tz',
     label: 'Dar es Salaam, Tanzania',
     shortLabel: 'Dar es Salaam',
     unLocode: 'TZDAR',
     transit: '25–32 days',
-    coords: [39.2695, -6.7924],
+    position: { lat: -6.7924, lng: 39.2695 },
     seaRoute: [
-      JAPAN_COORDS,
-      [126, 24],
-      [115, 13],
-      [104, 1.3],
-      [93, 3.5],
-      [74, -1.5],
-      [54, -6],
-      [39.2695, -6.7924],
+      JAPAN_HUB,
+      { lat: 24, lng: 126 },
+      { lat: 13, lng: 115 },
+      { lat: 1.3, lng: 104 },
+      { lat: 3.5, lng: 93 },
+      { lat: -1.5, lng: 74 },
+      { lat: -6, lng: 54 },
+      { lat: -6.7924, lng: 39.2695 },
     ],
-    labelDx: 9,
-    labelDy: 10,
-    labelAnchor: 'start',
   },
   {
     id: 'durban',
     countryCode: 'ZA',
-    isoNumeric: '710',
     portId: 'durban-za',
     label: 'Durban, South Africa',
     shortLabel: 'Durban',
     unLocode: 'ZADUR',
     transit: '26–34 days',
-    coords: [31.0218, -29.8587],
+    position: { lat: -29.8587, lng: 31.0218 },
     seaRoute: [
-      JAPAN_COORDS,
-      [126, 24],
-      [115, 13],
-      [104, 1.3],
-      [95, -4],
-      [76, -16],
-      [54, -27],
-      [31.0218, -29.8587],
+      JAPAN_HUB,
+      { lat: 24, lng: 126 },
+      { lat: 13, lng: 115 },
+      { lat: 1.3, lng: 104 },
+      { lat: -4, lng: 95 },
+      { lat: -16, lng: 76 },
+      { lat: -27, lng: 54 },
+      { lat: -29.8587, lng: 31.0218 },
     ],
-    labelDx: 9,
-    labelDy: 4,
-    labelAnchor: 'start',
   },
   {
     id: 'jebel-ali',
     countryCode: 'AE',
-    isoNumeric: '784',
     portId: 'jebel-ali-ae',
     label: 'Jebel Ali, UAE',
     shortLabel: 'Jebel Ali',
     unLocode: 'AEJEA',
     transit: '18–24 days',
-    coords: [55.0273, 24.9857],
+    position: { lat: 24.9857, lng: 55.0273 },
     seaRoute: [
-      JAPAN_COORDS,
-      [126, 24],
-      [115, 13],
-      [104, 1.3],
-      [91, 6.5],
-      [73, 13],
-      [58, 25.5],
-      [55.0273, 24.9857],
+      JAPAN_HUB,
+      { lat: 24, lng: 126 },
+      { lat: 13, lng: 115 },
+      { lat: 1.3, lng: 104 },
+      { lat: 6.5, lng: 91 },
+      { lat: 13, lng: 73 },
+      { lat: 25.5, lng: 58 },
+      { lat: 24.9857, lng: 55.0273 },
     ],
-    labelDx: 8,
-    labelDy: -6,
-    labelAnchor: 'start',
   },
   {
     id: 'southampton',
     countryCode: 'GB',
-    isoNumeric: '826',
     portId: 'southampton-uk',
     label: 'Southampton, UK',
     shortLabel: 'Southampton',
     unLocode: 'GBSOU',
     transit: '36–44 days',
-    coords: [-1.4044, 50.9097],
+    position: { lat: 50.9097, lng: -1.4044 },
     seaRoute: [
-      JAPAN_COORDS,
-      [126, 24],
-      [115, 13],
-      [104, 1.3],
-      [88, 6],
-      [65, 12],
-      [43.4, 12.6],
-      [32.6, 30.0],
-      [16, 35.5],
-      [-5.6, 36.0],
-      [-10.5, 43.5],
-      [-5.5, 49.5],
-      [-1.4044, 50.9097],
+      JAPAN_HUB,
+      { lat: 24, lng: 126 },
+      { lat: 13, lng: 115 },
+      { lat: 1.3, lng: 104 },
+      { lat: 6, lng: 88 },
+      { lat: 12, lng: 65 },
+      { lat: 12.6, lng: 43.4 },
+      { lat: 30.0, lng: 32.6 },
+      { lat: 35.5, lng: 16 },
+      { lat: 36.0, lng: -5.6 },
+      { lat: 43.5, lng: -10.5 },
+      { lat: 49.5, lng: -5.5 },
+      { lat: 50.9097, lng: -1.4044 },
     ],
-    labelDx: -9,
-    labelDy: -5,
-    labelAnchor: 'end',
   },
   {
     id: 'sydney',
     countryCode: 'AU',
-    isoNumeric: '036',
     portId: 'sydney-au',
     label: 'Sydney / Port Kembla',
     shortLabel: 'Sydney',
     unLocode: 'AUPKL',
     transit: '12–19 days',
-    coords: [151.2093, -33.8688],
+    position: { lat: -33.8688, lng: 151.2093 },
     seaRoute: [
-      JAPAN_COORDS,
-      [145, 22],
-      [152, 4],
-      [156, -18],
-      [151.2093, -33.8688],
+      JAPAN_HUB,
+      { lat: 22, lng: 145 },
+      { lat: 4, lng: 152 },
+      { lat: -18, lng: 156 },
+      { lat: -33.8688, lng: 151.2093 },
     ],
-    labelDx: -10,
-    labelDy: 4,
-    labelAnchor: 'end',
   },
   {
     id: 'auckland',
     countryCode: 'NZ',
-    isoNumeric: '554',
     portId: 'auckland-nz',
     label: 'Auckland, New Zealand',
     shortLabel: 'Auckland',
     unLocode: 'NZAKL',
     transit: '14–18 days',
-    coords: [174.7633, -36.8485],
+    position: { lat: -36.8485, lng: 174.7633 },
     seaRoute: [
-      JAPAN_COORDS,
-      [150, 20],
-      [164, -4],
-      [173, -24],
-      [174.7633, -36.8485],
+      JAPAN_HUB,
+      { lat: 20, lng: 150 },
+      { lat: -4, lng: 164 },
+      { lat: -24, lng: 173 },
+      { lat: -36.8485, lng: 174.7633 },
     ],
-    labelDx: -9,
-    labelDy: 13,
-    labelAnchor: 'end',
   },
   {
     id: 'kingston',
     countryCode: 'JM',
-    isoNumeric: '388',
     portId: 'kingston-jm',
     label: 'Kingston, Caribbean',
     shortLabel: 'Kingston',
     unLocode: 'JMKIN',
     transit: '30–38 days',
-    coords: [-76.7936, 17.9712],
+    position: { lat: 17.9712, lng: -76.7936 },
     seaRoute: [
-      JAPAN_COORDS,
-      [168, 29],
-      [-156, 22],
-      [-118, 15],
-      [-86, 8.5],
-      [-79.9, 9.3],
-      [-76.7936, 17.9712],
+      JAPAN_HUB,
+      { lat: 29, lng: 168 },
+      { lat: 22, lng: -156 },
+      { lat: 15, lng: -118 },
+      { lat: 8.5, lng: -86 },
+      { lat: 9.3, lng: -79.9 },
+      { lat: 17.9712, lng: -76.7936 },
     ],
-    labelDx: 9,
-    labelDy: 3,
-    labelAnchor: 'start',
   },
 ];
 
-const SERVED_BY_ISO = new Map<string, CorridorNode>(
-  CORRIDOR_NODES.map((n) => [n.isoNumeric, n])
-);
+const MAP_STYLE_OPTIONS: Array<{
+  id: GoogleMapTypeId;
+  label: string;
+  Icon: typeof Satellite;
+}> = [
+  { id: 'hybrid', label: 'Satellite', Icon: Satellite },
+  { id: 'satellite', label: 'Clean Sat', Icon: Globe },
+  { id: 'terrain', label: 'Terrain', Icon: Mountain },
+  { id: 'roadmap', label: 'Map', Icon: MapIcon },
+];
 
-const MAP_WIDTH = 960;
-const MAP_HEIGHT = 470;
+interface SeaLanePolylinesProps {
+  selectedPortId: string;
+  hoveredId: string | null;
+}
+
+function SeaLanePolylines({ selectedPortId, hoveredId }: SeaLanePolylinesProps) {
+  const map = useMap();
+  const mapsLib = useMapsLibrary('maps');
+
+  useEffect(() => {
+    if (!map || !mapsLib) return;
+
+    const polylines = CORRIDOR_NODES.map((node) => {
+      const emphasized = selectedPortId === node.portId || hoveredId === node.id;
+      return new mapsLib.Polyline({
+        path: node.seaRoute,
+        geodesic: true,
+        strokeColor: emphasized ? '#fbbf24' : '#38bdf8',
+        strokeOpacity: emphasized ? 0.95 : 0.45,
+        strokeWeight: emphasized ? 3.5 : 1.75,
+        zIndex: emphasized ? 20 : 5,
+        map,
+      });
+    });
+
+    return () => {
+      polylines.forEach((line) => line.setMap(null));
+    };
+  }, [map, mapsLib, selectedPortId, hoveredId]);
+
+  return null;
+}
+
+interface NetworkCameraControllerProps {
+  selectedNode: CorridorNode | null;
+  resetNonce: number;
+}
+
+function NetworkCameraController({ selectedNode, resetNonce }: NetworkCameraControllerProps) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!map || resetNonce === 0) return;
+    map.panTo(DEFAULT_CENTER);
+    map.setZoom(DEFAULT_ZOOM);
+  }, [map, resetNonce]);
+
+  useEffect(() => {
+    if (!map || !selectedNode) return;
+    // Frame both Yokohama hub and the selected destination port cleanly when user clicks a lane
+    const lats = selectedNode.seaRoute.map((p) => p.lat);
+    const north = Math.max(...lats);
+    const south = Math.min(...lats);
+
+    // Avoid crossing-antimeridian wrap distortion for trans-Pacific Kingston route
+    if (selectedNode.id === 'kingston') {
+      map.panTo({ lat: 20, lng: -150 });
+      map.setZoom(2);
+      return;
+    }
+
+    const lngs = selectedNode.seaRoute.map((p) => p.lng);
+    const east = Math.max(...lngs);
+    const west = Math.min(...lngs);
+    map.fitBounds({ north, south, east, west }, 48);
+  }, [map, selectedNode]);
+
+  return null;
+}
+
+interface PortMarkerProps {
+  node: CorridorNode;
+  isSelected: boolean;
+  isInfoOpen: boolean;
+  onHover: (id: string | null) => void;
+  onSelect: (node: CorridorNode) => void;
+  onCloseInfo: () => void;
+}
+
+function PortMarker({
+  node,
+  isSelected,
+  isInfoOpen,
+  onHover,
+  onSelect,
+  onCloseInfo,
+}: PortMarkerProps) {
+  const [markerRef, marker] = useAdvancedMarkerRef();
+
+  return (
+    <>
+      <AdvancedMarker
+        ref={markerRef}
+        position={node.position}
+        zIndex={isSelected ? 400 : 120}
+        title={`${node.label} (${node.unLocode})`}
+        onClick={() => onSelect(node)}
+      >
+        <div
+          onMouseEnter={() => onHover(node.id)}
+          onMouseLeave={() => onHover(null)}
+          className="flex flex-col items-center -translate-y-1/2 cursor-pointer select-none"
+        >
+          <div
+            className="rounded-full transition-transform hover:scale-125"
+            style={{
+              width: isSelected ? '16px' : '12px',
+              height: isSelected ? '16px' : '12px',
+              backgroundColor: isSelected ? '#fbbf24' : '#38bdf8',
+              border: '2px solid #020617',
+              boxShadow: isSelected
+                ? '0 0 0 5px rgba(251,191,36,0.45), 0 2px 8px rgba(0,0,0,0.6)'
+                : '0 0 0 3px rgba(56,189,248,0.28), 0 2px 6px rgba(0,0,0,0.5)',
+            }}
+          />
+          <span
+            className={`mt-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold whitespace-nowrap shadow-md border ${
+              isSelected
+                ? 'bg-amber-400 text-slate-950 border-amber-200'
+                : 'bg-slate-950/85 text-slate-100 border-white/20'
+            }`}
+          >
+            {node.shortLabel}
+          </span>
+        </div>
+      </AdvancedMarker>
+
+      {isInfoOpen && marker && (
+        <InfoWindow anchor={marker} maxWidth={260} onCloseClick={onCloseInfo}>
+          <div className="text-xs text-slate-900 space-y-1.5 p-0.5 min-w-[200px]">
+            <div className="font-bold text-sm text-slate-950">{node.label}</div>
+            <div className="font-mono text-[11px] text-amber-800 font-semibold">
+              UN/LOCODE: {node.unLocode}
+            </div>
+            <div className="text-[11px] text-slate-700">
+              <strong>Origin:</strong> Yokohama, Japan (JPYOK)
+            </div>
+            <div className="text-[11px] text-slate-700">
+              <strong>Est. Sea Transit:</strong> {node.transit}
+            </div>
+          </div>
+        </InfoWindow>
+      )}
+    </>
+  );
+}
 
 interface InteractiveWorldMapProps {
   selectedPortId: string;
@@ -234,93 +374,30 @@ export function InteractiveWorldMap({
   selectedPortId,
   onSelectDestination,
 }: InteractiveWorldMapProps) {
+  const [mapTypeId, setMapTypeId] = useState<GoogleMapTypeId>('hybrid');
   const [hoveredId, setHoveredId] = useState<string | null>(null);
-
-  const {
-    countries,
-    spherePath,
-    graticulePath,
-    japanPoint,
-    nodeProjections,
-    routePaths,
-  } = useMemo(() => {
-    const topology = worldAtlasRaw as unknown as Topology<{
-      countries: GeometryCollection<{ name?: string }>;
-    }>;
-    const fc = feature(
-      topology,
-      topology.objects.countries
-    ) as unknown as FeatureCollection<Geometry, { name?: string }>;
-
-    // Exclude Antarctica (010) so inhabited continents and maritime lanes fill the viewport cleanly
-    const filteredFeatures: Feature<Geometry, { name?: string }>[] = fc.features.filter(
-      (f) => String(f.id) !== '010'
-    );
-    const filteredCollection: FeatureCollection<Geometry, { name?: string }> = {
-      type: 'FeatureCollection',
-      features: filteredFeatures,
-    };
-
-    const projection = geoNaturalEarth1().fitExtent(
-      [
-        [10, 14],
-        [MAP_WIDTH - 10, MAP_HEIGHT - 14],
-      ],
-      filteredCollection
-    );
-
-    const pathGen = geoPath(projection);
-    const sphere = pathGen({ type: 'Sphere' }) || '';
-    const graticule = pathGen(geoGraticule10()) || '';
-
-    const countryPaths = filteredFeatures.map((f, idx) => ({
-      key: String(f.id ?? idx),
-      id: String(f.id ?? ''),
-      name: f.properties?.name || '',
-      d: pathGen(f) || '',
-    }));
-
-    const jp = projection(JAPAN_COORDS) || [805, 160];
-
-    const nodes = CORRIDOR_NODES.map((node) => {
-      const pt = projection(node.coords) || [0, 0];
-      return {
-        ...node,
-        x: pt[0],
-        y: pt[1],
-      };
-    });
-
-    const routes = CORRIDOR_NODES.map((node) => {
-      const line: LineString = {
-        type: 'LineString',
-        coordinates: node.seaRoute,
-      };
-      return {
-        id: node.id,
-        portId: node.portId,
-        d: pathGen(line) || '',
-      };
-    });
-
-    return {
-      countries: countryPaths,
-      spherePath: sphere,
-      graticulePath: graticule,
-      japanPoint: jp,
-      nodeProjections: nodes,
-      routePaths: routes,
-    };
-  }, []);
+  const [openInfoId, setOpenInfoId] = useState<string | null>(null);
+  const [focusedNode, setFocusedNode] = useState<CorridorNode | null>(null);
+  const [resetNonce, setResetNonce] = useState(0);
 
   const activeNode =
-    nodeProjections.find((n) => n.id === hoveredId) ||
-    nodeProjections.find((n) => n.portId === selectedPortId) ||
-    nodeProjections[0];
+    CORRIDOR_NODES.find((n) => n.id === hoveredId) ||
+    CORRIDOR_NODES.find((n) => n.portId === selectedPortId) ||
+    CORRIDOR_NODES[0];
+
+  const handleSelectPortNode = useCallback(
+    (node: CorridorNode) => {
+      setOpenInfoId(node.id);
+      setFocusedNode(node);
+      onSelectDestination(node.countryCode, node.portId);
+    },
+    [onSelectDestination]
+  );
 
   return (
-    <div className="bg-slate-950 rounded-2xl border border-slate-800 p-4 sm:p-6 overflow-hidden">
-      <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+    <div className="bg-slate-950 rounded-2xl border border-slate-800 p-4 sm:p-6 overflow-hidden space-y-3">
+      {/* Header Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
           <Anchor className="w-4 h-4 text-amber-400 shrink-0" />
           <span>Japan Export Hubs (Yokohama · Nagoya · Kobe · Osaka · Hakata)</span>
@@ -330,7 +407,7 @@ export function InteractiveWorldMap({
           <span className="text-slate-600" aria-hidden="true">
             ·
           </span>
-          <span>{activeNode.unLocode}</span>
+          <span className="font-mono">{activeNode.unLocode}</span>
           <span className="text-slate-600" aria-hidden="true">
             ·
           </span>
@@ -338,232 +415,159 @@ export function InteractiveWorldMap({
         </div>
       </div>
 
-      <div className="relative w-full aspect-[960/470] min-h-[260px]">
-        <svg
-          viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`}
-          className="w-full h-full select-none"
-          role="img"
-          aria-label="Real-world maritime vehicle shipping map from Japan to Africa, Middle East, Europe, Oceania, and the Caribbean"
-        >
-          <defs>
-            <radialGradient id="oceanBathymetry" cx="52%" cy="46%" r="65%">
-              <stop offset="0%" stopColor="#122c4a" />
-              <stop offset="55%" stopColor="#0b1d35" />
-              <stop offset="100%" stopColor="#061121" />
-            </radialGradient>
-            <linearGradient id="seaLaneGrad" x1="0%" y1="0%" x2="100%" y2="0%">
-              <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.9" />
-              <stop offset="100%" stopColor="#f59e0b" stopOpacity="0.9" />
-            </linearGradient>
-            <clipPath id="earthSphereClip">
-              <path d={spherePath} />
-            </clipPath>
-          </defs>
+      {/* Live Google Maps Satellite Viewport */}
+      <div className="relative w-full h-[420px] sm:h-[470px] rounded-xl overflow-hidden border border-slate-800 bg-slate-900">
+        {!GOOGLE_MAPS_API_KEY ? (
+          <div className="w-full h-full flex items-center justify-center p-6 text-center text-white">
+            <div className="max-w-md space-y-2">
+              <Layers className="w-8 h-8 text-amber-400 mx-auto" />
+              <div className="text-sm font-bold">Google Maps API Key Required</div>
+              <p className="text-xs text-slate-300">
+                Configure <span className="font-mono text-amber-300">VITE_GOOGLE_MAPS_API_KEY</span>{' '}
+                to display the live Google Satellite shipping network map.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <APIProvider
+            apiKey={GOOGLE_MAPS_API_KEY}
+            libraries={['marker', 'maps']}
+            language="en"
+            region="JP"
+          >
+            <GoogleMap
+              mapId="DEMO_MAP_ID"
+              mapTypeId={mapTypeId}
+              defaultCenter={DEFAULT_CENTER}
+              defaultZoom={DEFAULT_ZOOM}
+              minZoom={2}
+              maxZoom={18}
+              gestureHandling="cooperative"
+              mapTypeControl={false}
+              streetViewControl={false}
+              fullscreenControl={true}
+              zoomControl={true}
+              scaleControl={true}
+              internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
+              className="w-full h-full"
+            >
+              <SeaLanePolylines selectedPortId={selectedPortId} hoveredId={hoveredId} />
+              <NetworkCameraController selectedNode={focusedNode} resetNonce={resetNonce} />
 
-          {/* Earth Ocean Sphere */}
-          <path d={spherePath} fill="url(#oceanBathymetry)" stroke="#1e3a5f" strokeWidth="1" />
-
-          {/* Clipped Cartographic Layers */}
-          <g clipPath="url(#earthSphereClip)">
-            {/* Real Latitude / Longitude Graticule */}
-            <path
-              d={graticulePath}
-              fill="none"
-              stroke="#60a5fa"
-              strokeOpacity="0.11"
-              strokeWidth="0.6"
-            />
-
-            {/* Real-World Natural Earth Country Polygons */}
-            <g>
-              {countries.map((c) => {
-                const isJapan = c.id === JAPAN_ISO_NUMERIC;
-                const servedNode = SERVED_BY_ISO.get(c.id);
-                const isSelectedCountry = Boolean(
-                  servedNode && servedNode.portId === selectedPortId
-                );
-                const isHoveredCountry = Boolean(servedNode && servedNode.id === hoveredId);
-
-                let fill = '#223347';
-                let stroke = '#364d68';
-                let strokeWidth = 0.55;
-
-                if (isJapan) {
-                  fill = '#f59e0b';
-                  stroke = '#fde68a';
-                  strokeWidth = 0.9;
-                } else if (isSelectedCountry || isHoveredCountry) {
-                  fill = '#b45309';
-                  stroke = '#fbbf24';
-                  strokeWidth = 0.95;
-                } else if (servedNode) {
-                  fill = '#1b4965';
-                  stroke = '#38bdf8';
-                  strokeWidth = 0.7;
-                }
-
-                return (
-                  <path
-                    key={c.key}
-                    d={c.d}
-                    fill={fill}
-                    stroke={stroke}
-                    strokeWidth={strokeWidth}
-                    strokeLinejoin="round"
-                    className={
-                      servedNode
-                        ? 'cursor-pointer transition-colors duration-150'
-                        : 'transition-colors duration-150'
-                    }
-                    onMouseEnter={() => {
-                      if (servedNode) setHoveredId(servedNode.id);
-                    }}
-                    onMouseLeave={() => {
-                      if (servedNode) setHoveredId(null);
-                    }}
-                    onClick={() => {
-                      if (servedNode) {
-                        onSelectDestination(servedNode.countryCode, servedNode.portId);
-                      }
-                    }}
-                  >
-                    {c.name && <title>{c.name}</title>}
-                  </path>
-                );
-              })}
-            </g>
-
-            {/* Real Maritime Sea-Lane Corridors (GeoJSON Projected) */}
-            <g>
-              {routePaths.map((route) => {
-                const isSelected = selectedPortId === route.portId;
-                const isHovered = hoveredId === route.id;
-                const emphasized = isSelected || isHovered;
-                return (
-                  <g key={route.id}>
-                    {emphasized && (
-                      <path
-                        d={route.d}
-                        fill="none"
-                        stroke="#f59e0b"
-                        strokeWidth={5}
-                        strokeOpacity={0.22}
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      />
-                    )}
-                    <path
-                      d={route.d}
-                      fill="none"
-                      stroke={emphasized ? '#fbbf24' : 'url(#seaLaneGrad)'}
-                      strokeWidth={emphasized ? 2.2 : 1.25}
-                      strokeDasharray={emphasized ? '7 4' : '4 4'}
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      className="auzio-route-dash"
-                      opacity={emphasized ? 1 : 0.62}
-                    />
-                  </g>
-                );
-              })}
-            </g>
-
-            {/* Origin Hub: Yokohama, Japan */}
-            <g>
-              <circle cx={japanPoint[0]} cy={japanPoint[1]} r="10" fill="#f59e0b" opacity="0.24" />
-              <circle
-                cx={japanPoint[0]}
-                cy={japanPoint[1]}
-                r="4.5"
-                fill="#f59e0b"
-                stroke="#ffffff"
-                strokeWidth="1.5"
-              />
-              <text
-                x={japanPoint[0] + 9}
-                y={japanPoint[1] - 7}
-                fill="#fde68a"
-                stroke="#061121"
-                strokeWidth="3.5"
-                paintOrder="stroke"
-                fontSize="10.5"
-                fontWeight="700"
-                letterSpacing="0.03em"
+              {/* Origin Hub: Yokohama, Japan */}
+              <AdvancedMarker
+                position={JAPAN_HUB}
+                zIndex={450}
+                title="Japan Export Hub — Yokohama (JPYOK)"
               >
-                JAPAN (JPYOK)
-              </text>
-            </g>
+                <div className="flex flex-col items-center -translate-y-1/2 select-none">
+                  <div
+                    className="w-4 h-4 rounded-full bg-amber-400 border-2 border-white"
+                    style={{
+                      boxShadow:
+                        '0 0 0 6px rgba(245,158,11,0.4), 0 2px 10px rgba(0,0,0,0.65)',
+                    }}
+                  />
+                  <span className="mt-1 px-2 py-0.5 rounded bg-amber-400 text-slate-950 text-[10px] font-mono font-extrabold whitespace-nowrap shadow-md">
+                    JAPAN (JPYOK)
+                  </span>
+                </div>
+              </AdvancedMarker>
 
-            {/* Clickable Real-Coordinate Destination Ports */}
-            {nodeProjections.map((node) => {
-              const isSelected = selectedPortId === node.portId;
-              const isHovered = hoveredId === node.id;
-              const active = isSelected || isHovered;
-              return (
-                <g
+              {/* Clickable Destination Port Markers */}
+              {CORRIDOR_NODES.map((node) => (
+                <PortMarker
                   key={node.id}
-                  onMouseEnter={() => setHoveredId(node.id)}
-                  onMouseLeave={() => setHoveredId(null)}
-                  onClick={() => onSelectDestination(node.countryCode, node.portId)}
-                  className="cursor-pointer"
-                >
-                  <circle
-                    cx={node.x}
-                    cy={node.y}
-                    r={active ? 11 : 7}
-                    fill={active ? '#f59e0b' : '#38bdf8'}
-                    opacity={active ? 0.3 : 0.18}
-                  />
-                  <circle
-                    cx={node.x}
-                    cy={node.y}
-                    r={active ? 4.8 : 3.6}
-                    fill={active ? '#fbbf24' : '#38bdf8'}
-                    stroke="#061121"
-                    strokeWidth="1.5"
-                  />
-                  <text
-                    x={node.x + node.labelDx}
-                    y={node.y + node.labelDy}
-                    textAnchor={node.labelAnchor}
-                    fill={active ? '#fef3c7' : '#e2e8f0'}
-                    stroke="#061121"
-                    strokeWidth="3.5"
-                    paintOrder="stroke"
-                    fontSize={active ? '10.5' : '9.5'}
-                    fontWeight={active ? '700' : '600'}
-                  >
-                    {node.shortLabel}
-                  </text>
-                </g>
-              );
-            })}
-          </g>
+                  node={node}
+                  isSelected={selectedPortId === node.portId}
+                  isInfoOpen={openInfoId === node.id}
+                  onHover={setHoveredId}
+                  onSelect={handleSelectPortNode}
+                  onCloseInfo={() => setOpenInfoId(null)}
+                />
+              ))}
+            </GoogleMap>
+          </APIProvider>
+        )}
 
-          {/* Subtle Ocean Legend inside Bottom-Left Corner */}
-          <g transform="translate(22, 434)" fontSize="9.5" fill="#94a3b8">
-            <circle cx="5" cy="0" r="3.5" fill="#f59e0b" />
-            <text x="14" y="3.5" fill="#cbd5e1">
-              Japan Export Hub
-            </text>
-            <circle cx="122" cy="0" r="3.5" fill="#38bdf8" />
-            <text x="131" y="3.5" fill="#cbd5e1">
-              Destination Port
-            </text>
-            <line
-              x1="226"
-              y1="0"
-              x2="246"
-              y2="0"
-              stroke="#fbbf24"
-              strokeWidth="2"
-              strokeDasharray="4 3"
-            />
-            <text x="253" y="3.5" fill="#cbd5e1">
-              Active Maritime Lane
-            </text>
-          </g>
-        </svg>
+        {/* Top-left Map Type Switcher */}
+        <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-1 bg-slate-950/85 backdrop-blur-md p-1 rounded-lg border border-white/15 shadow-lg">
+          {MAP_STYLE_OPTIONS.map(({ id, label, Icon }) => {
+            const active = mapTypeId === id;
+            return (
+              <button
+                key={id}
+                type="button"
+                onClick={() => setMapTypeId(id)}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition-colors cursor-pointer ${
+                  active
+                    ? 'bg-amber-400 text-slate-950 shadow-xs'
+                    : 'text-slate-200 hover:bg-white/10 hover:text-white'
+                }`}
+              >
+                <Icon className="w-3.5 h-3.5" />
+                {label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Top-right World View Reset */}
+        <div className="absolute top-3 right-14 z-10">
+          <button
+            type="button"
+            onClick={() => {
+              setFocusedNode(null);
+              setOpenInfoId(null);
+              setResetNonce((n) => n + 1);
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-semibold bg-slate-950/85 backdrop-blur-md text-white border border-white/15 hover:bg-slate-900 rounded-lg shadow-lg cursor-pointer"
+            title="Reset to global shipping network view"
+          >
+            <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
+            World View
+          </button>
+        </div>
+      </div>
+
+      {/* Quick Destination Corridor Buttons + Legend */}
+      <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {CORRIDOR_NODES.map((node) => {
+            const isSelected = selectedPortId === node.portId;
+            return (
+              <button
+                key={node.id}
+                type="button"
+                onMouseEnter={() => setHoveredId(node.id)}
+                onMouseLeave={() => setHoveredId(null)}
+                onClick={() => handleSelectPortNode(node)}
+                className={`px-2.5 py-1 rounded-md text-[11px] font-mono font-semibold border transition-colors cursor-pointer ${
+                  isSelected
+                    ? 'bg-amber-400 text-slate-950 border-amber-300'
+                    : 'bg-slate-900 text-slate-300 border-slate-800 hover:border-amber-500/60 hover:text-white'
+                }`}
+              >
+                {node.shortLabel} ({node.unLocode})
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="flex items-center gap-4 text-[11px] text-slate-400">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-amber-400" />
+            Japan Hub
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-2.5 h-2.5 rounded-full bg-sky-400" />
+            Destination Port
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-4 h-0.5 bg-amber-400 inline-block" />
+            Active Lane
+          </span>
+        </div>
       </div>
     </div>
   );

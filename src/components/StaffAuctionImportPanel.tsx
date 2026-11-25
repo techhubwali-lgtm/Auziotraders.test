@@ -8,7 +8,7 @@ import {
   Search,
 } from 'lucide-react';
 import { useEffect, useState } from 'react';
-import { formatMoney } from '../data/ports';
+import { formatJpyConverted, formatMoney } from '../data/ports';
 import {
   fetchAuctionMeta,
   fetchLiveLotDetail,
@@ -355,7 +355,8 @@ export function StaffAuctionImportPanel({
                         <div className="font-bold text-slate-950">{fmt(lot.fobPriceUsd)} FOB</div>
                         {rawJpy > 0 && (
                           <div className="text-[10px] text-slate-500">
-                            ¥{rawJpy.toLocaleString()} JPY
+                            Auction: {formatJpyConverted(rawJpy, currency, settings.exchangeRates)}
+                            {currency !== 'JPY' ? ` (¥${rawJpy.toLocaleString()})` : ''}
                           </div>
                         )}
                       </div>

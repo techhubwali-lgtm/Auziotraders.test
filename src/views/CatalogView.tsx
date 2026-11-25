@@ -31,7 +31,7 @@ import {
   type CatalogFilterState,
 } from '../components/SearchFilterBanner';
 import { VehicleImage } from '../components/VehicleImage';
-import { calculateCif, formatMoney, getPortById } from '../data/ports';
+import { calculateCif, formatJpyConverted, formatMoney, getPortById } from '../data/ports';
 import { HERO_EXPORT_IMAGE } from '../data/seedData';
 import { EN_COPY } from '../i18n/en';
 import { fetchAuctionMeta, searchLiveAuctions } from '../services/auctionFeedService';
@@ -773,8 +773,8 @@ export function CatalogView({
                       </div>
                       <p className="text-[11px] text-slate-300">
                         {liveTable === 'stats'
-                          ? `Showing actual historical Japanese auction hammer prices converted at ¥${settings.exchangeRates.JPY}/USD into CIF ${activePort.name} to help calibrate your Maximum Bid Ceiling.`
-                          : `On-demand live auction query converted at ¥${settings.exchangeRates.JPY}/USD into landed CIF ${activePort.name}. Click any lot to fetch its full sheet & gallery by ID.`}
+                          ? `Showing actual historical Japanese auction hammer prices converted at ¥${Number(settings.exchangeRates.JPY || 154).toFixed(2)}/USD into ${currency} CIF ${activePort.name} to help calibrate your Maximum Bid Ceiling.`
+                          : `On-demand live auction query converted at ¥${Number(settings.exchangeRates.JPY || 154).toFixed(2)}/USD into ${currency} landed CIF ${activePort.name}. Click any lot to fetch its full sheet & gallery by ID.`}
                       </p>
                     </div>
                     <div className="flex items-center gap-2 shrink-0">
@@ -1202,16 +1202,21 @@ export function CatalogView({
                           {/* Pricing Block */}
                           <div className="pt-2.5 border-t border-slate-200 space-y-1.5">
                             {isLiveFeed && rawJpy > 0 && (
-                              <div className="flex items-baseline justify-between text-[11px]">
+                              <div className="flex items-baseline justify-between gap-2 text-[11px]">
                                 <span className="text-slate-500">
                                   {vehicle.auctionSourceMeta?.priceBasis === 'finish'
-                                    ? 'Sold Hammer (JPY)'
+                                    ? 'Sold Hammer'
                                     : vehicle.auctionSourceMeta?.priceBasis === 'average'
-                                      ? 'Auction Avg (JPY)'
-                                      : 'Auction Start (JPY)'}
+                                      ? 'Auction Avg'
+                                      : 'Auction Start'}
                                 </span>
-                                <span className="font-mono font-semibold text-amber-800 tabular-nums">
-                                  ¥{rawJpy.toLocaleString()}
+                                <span className="font-mono font-semibold text-amber-800 tabular-nums text-right">
+                                  {formatJpyConverted(rawJpy, currency, settings.exchangeRates)}
+                                  {currency !== 'JPY' && (
+                                    <span className="text-[10px] font-normal text-slate-500 ml-1">
+                                      (¥{rawJpy.toLocaleString()})
+                                    </span>
+                                  )}
                                 </span>
                               </div>
                             )}

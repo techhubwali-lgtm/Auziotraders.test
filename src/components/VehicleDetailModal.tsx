@@ -15,6 +15,7 @@ import {
 import { useEffect, useMemo, useState } from 'react';
 import {
   calculateCif,
+  formatJpyConverted,
   formatMoney,
   GLOBAL_PORTS,
   SHIPPING_METHOD_LABELS,
@@ -472,20 +473,47 @@ export function VehicleDetailModal({
                     <div className="text-[11px] font-mono text-amber-800 mt-1 space-y-0.5">
                       {activeVehicle.auctionSourceMeta.rawFinishPriceJpy > 0 && (
                         <div>
-                          Hammer / Sold: ¥
-                          {activeVehicle.auctionSourceMeta.rawFinishPriceJpy.toLocaleString()} JPY
+                          Hammer / Sold:{' '}
+                          {formatJpyConverted(
+                            activeVehicle.auctionSourceMeta.rawFinishPriceJpy,
+                            currency,
+                            settings.exchangeRates
+                          )}
+                          {currency !== 'JPY' && (
+                            <span className="text-slate-500 ml-1">
+                              (¥{activeVehicle.auctionSourceMeta.rawFinishPriceJpy.toLocaleString()} JPY)
+                            </span>
+                          )}
                         </div>
                       )}
                       {activeVehicle.auctionSourceMeta.rawAvgPriceJpy > 0 && (
                         <div>
-                          Recent Avg: ¥
-                          {activeVehicle.auctionSourceMeta.rawAvgPriceJpy.toLocaleString()} JPY
+                          Recent Avg:{' '}
+                          {formatJpyConverted(
+                            activeVehicle.auctionSourceMeta.rawAvgPriceJpy,
+                            currency,
+                            settings.exchangeRates
+                          )}
+                          {currency !== 'JPY' && (
+                            <span className="text-slate-500 ml-1">
+                              (¥{activeVehicle.auctionSourceMeta.rawAvgPriceJpy.toLocaleString()} JPY)
+                            </span>
+                          )}
                         </div>
                       )}
                       {activeVehicle.auctionSourceMeta.rawStartPriceJpy > 0 && (
                         <div>
-                          Start Bid: ¥
-                          {activeVehicle.auctionSourceMeta.rawStartPriceJpy.toLocaleString()} JPY
+                          Start Bid:{' '}
+                          {formatJpyConverted(
+                            activeVehicle.auctionSourceMeta.rawStartPriceJpy,
+                            currency,
+                            settings.exchangeRates
+                          )}
+                          {currency !== 'JPY' && (
+                            <span className="text-slate-500 ml-1">
+                              (¥{activeVehicle.auctionSourceMeta.rawStartPriceJpy.toLocaleString()} JPY)
+                            </span>
+                          )}
                         </div>
                       )}
                     </div>

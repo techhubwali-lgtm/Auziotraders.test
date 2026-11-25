@@ -402,6 +402,20 @@ export function ProformaInvoiceModal({
               {draft.isRateLocked && draft.lockedRateDate && draft.currency !== 'USD'
                 ? ` Confirmed invoice exchange rate locked on ${draft.lockedRateDate.slice(0, 10)}.`
                 : ''}
+              {draft.currency !== 'USD' && (
+                <>
+                  {' '}
+                  <a
+                    href="https://www.exchangerate-api.com"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="underline hover:text-amber-700"
+                  >
+                    Rates By Exchange Rate API
+                  </a>
+                  .
+                </>
+              )}
             </div>
             <div className="font-mono text-slate-700 font-medium">
               Authorized Export Desk

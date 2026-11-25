@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Search } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react';
 
 export interface SearchableOption {
   value: string;
@@ -20,7 +20,7 @@ interface SearchableSelectProps {
   variant?: 'dark' | 'light';
   align?: 'left' | 'right';
   triggerPrefix?: string;
-  footerNote?: string;
+  footerNote?: ReactNode;
   compact?: boolean;
 }
 

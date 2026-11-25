@@ -374,6 +374,28 @@ export function formatMoney(
   return `$${Math.round(amountUsd).toLocaleString('en-US')} USD`;
 }
 
+/**
+ * Converts a Japanese auction price in JPY into the currently selected portal currency
+ * using the active USD-base exchange rate map (or returns formatted JPY directly when JPY is selected).
+ */
+export function formatJpyConverted(
+  amountJpy: number,
+  currency: CurrencyCode,
+  rates?: Record<string, number>
+): string {
+  const safeJpy = Math.round(Number(amountJpy) || 0);
+  const code = (currency || 'USD').toUpperCase();
+  if (code === 'JPY') {
+    return `¥${safeJpy.toLocaleString('en-US')}`;
+  }
+  const jpyPerUsd = rates?.JPY;
+  if (typeof jpyPerUsd === 'number' && Number.isFinite(jpyPerUsd) && jpyPerUsd > 0) {
+    const usdEquivalent = safeJpy / jpyPerUsd;
+    return formatMoney(usdEquivalent, code, rates);
+  }
+  return `¥${safeJpy.toLocaleString('en-US')}`;
+}
+
 export function isVerifiedShippingPort(portId: string): boolean {
   return GLOBAL_PORTS.some((p) => p.id === portId);
 }

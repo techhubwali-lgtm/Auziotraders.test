@@ -168,7 +168,6 @@ import { LandingView } from './views/LandingView';
 import { OrderTrackerView } from './views/OrderTrackerView';
 import { ShippingRatesView } from './views/ShippingRatesView';
 import { StaffConsoleView } from './views/StaffConsoleView';
-import { VesselTrackingView } from './views/VesselTrackingView';
 
 const BOOTSTRAP_ADMIN_EMAIL = 'techhub.wali@gmail.com';
 const STORAGE_CURRENCY_KEY = 'auzio_currency_v2';
@@ -230,6 +229,13 @@ export default function App() {
   // Navigation & Global Trade Preferences (persisted in localStorage)
   const [activeView, setActiveView] = useState<AppView>('home');
   const [catalogSourceMode, setCatalogSourceMode] = useState<'curated' | 'live_auctions'>('curated');
+  const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
+
+  useEffect(() => {
+    const onQuotaExceeded = () => setGmpQuotaExceeded(true);
+    window.addEventListener('gmp-quota-exceeded', onQuotaExceeded);
+    return () => window.removeEventListener('gmp-quota-exceeded', onQuotaExceeded);
+  }, []);
 
   const [customerTab, setCustomerTab] = useState<CustomerPortalTab>('profile');
   const [currency, setCurrencyState] = useState<CurrencyCode>(() =>
@@ -270,6 +276,7 @@ export default function App() {
   // Cloud Datasets
   const [cloudVehicles, setCloudVehicles] = useState<Vehicle[]>([]);
   const [fxCache, setFxCache] = useState<ExchangeRateCacheDoc | null>(null);
+  const [fxCacheLoaded, setFxCacheLoaded] = useState(false);
   const [cloudVessels, setCloudVessels] = useState<RegisteredVessel[]>([]);
   const [integrationConfig, setIntegrationConfig] = useState<ApiIntegrationConfig>(
     DEFAULT_API_INTEGRATION_CONFIG
@@ -379,7 +386,7 @@ export default function App() {
     [notify]
   );
 
-  // Fetch live exchange rates on mount & on manual refresh
+  // Fetch live exchange rates only when Firestore 24h cache is absent/stale or on manual refresh
   const loadExchangeRates = useCallback(async (force = false) => {
     setLiveFx((prev) => ({ ...prev, loading: true }));
     const res = await fetchLiveExchangeRates(force);
@@ -387,9 +394,26 @@ export default function App() {
     return res;
   }, []);
 
+  // Firestore-first 24h FX cache guard: avoid unnecessary API requests when Firebase cache is fresh
   useEffect(() => {
-    void loadExchangeRates(false);
-  }, [loadExchangeRates]);
+    if (!fxCacheLoaded) return;
+    const cacheHasRates = Boolean(fxCache && Object.keys(fxCache.rates || {}).length > 1);
+    const cacheFresh = cacheHasRates && !isFirestoreFxCacheStale(fxCache);
+
+    if (cacheFresh) {
+      setLiveFx((prev) => (prev.loading ? { ...prev, loading: false } : prev));
+    } else if (!liveFx.ok) {
+      void loadExchangeRates(false);
+    }
+
+    // Periodic 30-minute check to trigger automatic 24-hour refresh if session stays open
+    const timer = setInterval(() => {
+      if (isFirestoreFxCacheStale(fxCache)) {
+        void loadExchangeRates(false);
+      }
+    }, 30 * 60 * 1000);
+    return () => clearInterval(timer);
+  }, [fxCacheLoaded, fxCache, liveFx.ok, loadExchangeRates]);
 
   // Sync dynamic SEO metadata from Landing CMS
   useEffect(() => {
@@ -402,22 +426,24 @@ export default function App() {
     }
   }, [landingContent.seoTitle, landingContent.seoDescription]);
 
-  // Resolve effective live FX state (Live API -> Firestore 24h cache fallback -> Apply Admin margins)
+  // Resolve effective live FX state (Live API -> Firestore 24h cache -> Apply Admin margins)
   const effectiveLiveFx = useMemo<LiveExchangeRateState>(() => {
     const globalMarginPct = fxCache?.globalMarginPct ?? 0;
     const currencyMargins = fxCache?.currencyMargins ?? {};
 
     if (liveFx.ok && Object.keys(liveFx.rates || {}).length > 1) {
+      const rawBase = liveFx.rawRates || liveFx.rates;
       return {
         ...liveFx,
-        rates: applyExchangeMargins(liveFx.rates, globalMarginPct, currencyMargins),
-        rawRates: liveFx.rates,
+        rates: applyExchangeMargins(rawBase, globalMarginPct, currencyMargins),
+        rawRates: rawBase,
         globalMarginPct,
         currencyMargins,
       };
     }
 
     if (fxCache && Object.keys(fxCache.rates || {}).length > 1) {
+      const stale = isFirestoreFxCacheStale(fxCache);
       return {
         ok: true,
         loading: liveFx.loading,
@@ -429,15 +455,16 @@ export default function App() {
         updatedAt: fxCache.updatedAt || null,
         nextUpdateAt: fxCache.nextUpdateAt || null,
         jpyUpdatedAt: fxCache.jpyUpdatedAt || null,
-        provider: fxCache.provider || 'ExchangeRate-API (Saved Firestore Cache)',
+        provider: fxCache.provider || 'ExchangeRate-API (open.er-api.com)',
         attributionUrl: fxCache.attributionUrl || 'https://www.exchangerate-api.com',
         source: 'firestore_cache',
-        stale: true,
+        stale,
         globalMarginPct,
         currencyMargins,
-        error:
-          liveFx.error ||
-          'Live ExchangeRate-API temporarily unreachable — serving previously saved Firestore rates.',
+        error: stale
+          ? liveFx.error ||
+            'Live ExchangeRate-API temporarily unreachable — serving previously saved Firestore rates.'
+          : undefined,
       };
     }
 
@@ -556,7 +583,10 @@ export default function App() {
     const unsubV = subscribeVehicles((list) => setCloudVehicles(list));
     const unsubS = subscribeCompanySettings((s) => setSettings(s));
     const unsubL = subscribeLandingContent((c) => setLandingContent(c));
-    const unsubFx = subscribeExchangeRateCache((cache) => setFxCache(cache));
+    const unsubFx = subscribeExchangeRateCache((cache) => {
+      setFxCache(cache);
+      setFxCacheLoaded(true);
+    });
     const unsubVessels = subscribeVessels((list) => setCloudVessels(list));
     return () => {
       unsubV();
@@ -675,15 +705,16 @@ export default function App() {
         hasModulePermission(effectiveRole, activeProfile, 'logistics', 'edit'))
   );
 
-  // Persist fresh ExchangeRate-API snapshot to Firestore every 24h when authorized staff is active
+  // Persist fresh ExchangeRate-API raw snapshot to Firestore every 24h when authorized staff is active
   const persistExchangeRateSnapshot = useCallback(
     async (fx: LiveExchangeRateState) => {
-      if (!canPersistFxCache || !fx.ok || Object.keys(fx.rates || {}).length < 2) return;
+      const rawRates = fx.rawRates || fx.rates;
+      if (!canPersistFxCache || !fx.ok || Object.keys(rawRates || {}).length < 2) return;
       await saveExchangeRateCache({
         base: 'USD',
-        rates: fx.rates,
+        rates: rawRates,
         jpyRates: fx.jpyRates || { JPY: 1 },
-        supportedCount: fx.supportedCount || Object.keys(fx.rates).length,
+        supportedCount: fx.supportedCount || Object.keys(rawRates).length,
         globalMarginPct: fxCache?.globalMarginPct ?? 0,
         currencyMargins: fxCache?.currencyMargins ?? {},
         provider: fx.provider || 'ExchangeRate-API (open.er-api.com)',
@@ -1112,7 +1143,8 @@ export default function App() {
       if (opts?.sourceMode) {
         setCatalogSourceMode(opts.sourceMode);
       }
-      const targetView: AppView = view === 'catalog' ? 'home' : view;
+      const targetView: AppView =
+        view === 'catalog' ? 'home' : view === 'vessel_tracking' ? 'track' : view;
       const targetAnchor = opts?.anchor || (view === 'catalog' ? 'vehicle-catalog' : undefined);
       setActiveView(targetView);
       if (targetAnchor) {
@@ -1227,6 +1259,22 @@ export default function App() {
   return (
     <ErrorBoundary>
       <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+        {gmpQuotaExceeded && (
+          <div className="bg-amber-50 border-b border-amber-200 text-amber-900 px-4 py-2.5 text-xs md:text-sm text-center sticky top-0 z-50 shadow-sm">
+            <span>
+              Google Maps Platform quota reached. If you are the app owner, visit{' '}
+              <a
+                href="https://developers.google.com/maps/ai/ai-studio?utm_campaign=gmp_mcp_codeassist_v1_aistudio#quota_exceeded_errors"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="underline font-semibold text-amber-950 hover:text-amber-800"
+              >
+                maps developer site
+              </a>{' '}
+              for instructions to update your account.
+            </span>
+          </div>
+        )}
         {activeView !== 'staff_console' && (
           <Navbar
             activeView={activeView}
@@ -1371,18 +1419,10 @@ export default function App() {
             />
           )}
 
-          {activeView === 'track' && (
+          {(activeView === 'track' || activeView === 'vessel_tracking') && (
             <OrderTrackerView
               initialCode={trackerInitialCode}
               settings={effectiveSettings}
-              vessels={mergedVessels}
-              orders={orders}
-              onOpenVesselTracking={() => handleNavigateView('vessel_tracking')}
-            />
-          )}
-
-          {activeView === 'vessel_tracking' && (
-            <VesselTrackingView
               vessels={mergedVessels}
               liveAisPositions={liveAisPositions}
               aisStatus={aisStatus}
@@ -1394,10 +1434,6 @@ export default function App() {
                 notify(`Saved ${v.name} (MMSI ${v.mmsi}) to Fleet Roster in Firestore`);
               }}
               onRefreshPositions={refreshAisTracking}
-              onOpenOrderTracker={(code) => {
-                if (code) setTrackerInitialCode(code);
-                handleNavigateView('track');
-              }}
             />
           )}
 
@@ -1418,7 +1454,7 @@ export default function App() {
               prefillVehicle={prefillSourcingVehicle}
               isLiveFirestoreMode={isLiveFirestoreMode}
               onClearPrefillVehicle={() => setPrefillSourcingVehicle(null)}
-              onOpenVesselTracking={() => handleNavigateView('vessel_tracking')}
+              onOpenVesselTracking={() => handleNavigateView('track')}
               onOpenCustomerLogin={() => {
                 setAuthError('');
                 setLoginModalOpen(true);
@@ -2063,6 +2099,7 @@ export default function App() {
           <>
             <Footer
               landingContent={landingContent}
+              liveFxUpdatedAt={effectiveLiveFx.updatedAt}
               onNavigateView={handleNavigateView}
               onOpenPolicy={(policy) => setActivePolicy(policy)}
             />

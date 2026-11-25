@@ -1206,7 +1206,14 @@ export function CustomerPortalView({
                       {TRADE_MILESTONE_META[ord.milestone]?.label} · {ord.destinationPortName}
                     </div>
                     <div className="font-mono text-xs font-semibold pt-1">
-                      CIF {fmt(ord.totalCifUsd)} · Ref {ord.trackingCode}
+                      CIF{' '}
+                      {ord.lockedExchangeRate && ord.lockedCurrency
+                        ? formatMoney(ord.totalCifUsd, ord.lockedCurrency, {
+                            ...settings.exchangeRates,
+                            [ord.lockedCurrency]: ord.lockedExchangeRate,
+                          })
+                        : fmt(ord.totalCifUsd)}{' '}
+                      · Ref {ord.trackingCode}
                     </div>
                   </button>
                 );
@@ -1239,16 +1246,26 @@ export function CustomerPortalView({
                         const matched =
                           vehicles.find((v) => v.id === activeOrder.vehicleId) || vehicles[0];
                         if (!matched) return;
-                        const cif = calculateCif({
+                        const baseCif = calculateCif({
                           fobUsd: activeOrder.fobUsd,
                           volumeM3: matched.volumeM3,
                           portId: activeOrder.destinationPortId,
                           shippingMethod: activeOrder.shippingMethod,
                           includeInsurance: activeOrder.insuranceUsd > 0,
                         });
+                        const confirmedCif = {
+                          ...baseCif,
+                          fobUsd: activeOrder.fobUsd,
+                          freightUsd: activeOrder.freightUsd,
+                          inspectionUsd: activeOrder.inspectionUsd,
+                          insuranceUsd: activeOrder.insuranceUsd,
+                          totalCifUsd: activeOrder.totalCifUsd,
+                          includeInsurance: activeOrder.insuranceUsd > 0,
+                          rateAvailable: true,
+                        };
                         onOpenProforma({
                           vehicle: matched,
-                          cif,
+                          cif: confirmedCif,
                           trackingCode: activeOrder.trackingCode,
                           currency: activeOrder.lockedCurrency || activeOrder.currency,
                           lockedExchangeRate: activeOrder.lockedExchangeRate,

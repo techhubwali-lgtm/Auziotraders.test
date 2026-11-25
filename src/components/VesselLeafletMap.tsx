@@ -1,12 +1,28 @@
-import L from 'leaflet';
-import 'leaflet/dist/leaflet.css';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Layers, Maximize2 } from 'lucide-react';
+import {
+  AdvancedMarker,
+  APIProvider,
+  InfoWindow,
+  Map as GoogleMap,
+  useAdvancedMarkerRef,
+  useMap,
+} from '@vis.gl/react-google-maps';
+import { Globe, Layers, Map as MapIcon, Maximize2, Mountain, Satellite } from 'lucide-react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   formatNavigationalStatus,
   getVesselFreshness,
 } from '../services/vesselTrackingService';
 import type { RegisteredVessel } from '../types/portal';
+
+// Modern Google Maps Platform React implementation using @vis.gl/react-google-maps
+// AdvancedMarker + InfoWindow + Satellite/Hybrid/Terrain/Roadmap views.
+// Ref: https://developers.google.com/maps/documentation/javascript/advanced-markers/overview?utm_campaign=gmp_mcp_codeassist_v1_aistudio
+
+const GOOGLE_MAPS_API_KEY = (import.meta.env.VITE_GOOGLE_MAPS_API_KEY || '').trim();
+const DEFAULT_CENTER = { lat: 20, lng: 95 };
+const DEFAULT_ZOOM = 3;
+
+type GoogleMapTypeId = 'hybrid' | 'satellite' | 'terrain' | 'roadmap';
 
 interface VesselLeafletMapProps {
   vessels: RegisteredVessel[];
@@ -15,18 +31,16 @@ interface VesselLeafletMapProps {
   heightClass?: string;
 }
 
-function escapeHtml(raw: string): string {
-  return raw
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
+interface PositionedVessel {
+  vessel: RegisteredVessel;
+  lat: number;
+  lng: number;
+  isManual: boolean;
 }
 
 function getVesselCoordinates(vessel: RegisteredVessel): {
   lat: number;
-  lon: number;
+  lng: number;
   isManual: boolean;
 } | null {
   if (
@@ -35,7 +49,7 @@ function getVesselCoordinates(vessel: RegisteredVessel): {
     Number.isFinite(vessel.latitude) &&
     Number.isFinite(vessel.longitude)
   ) {
-    return { lat: vessel.latitude, lon: vessel.longitude, isManual: false };
+    return { lat: vessel.latitude, lng: vessel.longitude, isManual: false };
   }
   if (
     typeof vessel.manualLatitude === 'number' &&
@@ -43,13 +57,40 @@ function getVesselCoordinates(vessel: RegisteredVessel): {
     Number.isFinite(vessel.manualLatitude) &&
     Number.isFinite(vessel.manualLongitude)
   ) {
-    return { lat: vessel.manualLatitude, lon: vessel.manualLongitude, isManual: true };
+    return { lat: vessel.manualLatitude, lng: vessel.manualLongitude, isManual: true };
   }
   return null;
 }
 
-function buildShipIcon(vessel: RegisteredVessel, isSelected: boolean): L.DivIcon {
+function getFreshnessColor(vessel: RegisteredVessel): string {
   const freshness = getVesselFreshness(vessel);
+  if (freshness.status === 'stale') return '#f59e0b';
+  if (freshness.status === 'outdated') return '#ef4444';
+  if (freshness.status === 'manual_only') return '#3b82f6';
+  if (freshness.status === 'no_signal') return '#94a3b8';
+  return '#10b981';
+}
+
+interface VesselMarkerItemProps {
+  item: PositionedVessel;
+  isSelected: boolean;
+  isInfoOpen: boolean;
+  onSelect: (vesselId: string) => void;
+  onCloseInfo: () => void;
+}
+
+function VesselMarkerItem({
+  item,
+  isSelected,
+  isInfoOpen,
+  onSelect,
+  onCloseInfo,
+}: VesselMarkerItemProps) {
+  const { vessel, lat, lng, isManual } = item;
+  const [markerRef, marker] = useAdvancedMarkerRef();
+  const freshness = getVesselFreshness(vessel);
+  const fill = getFreshnessColor(vessel);
+
   const heading =
     typeof vessel.headingDeg === 'number'
       ? vessel.headingDeg
@@ -57,31 +98,197 @@ function buildShipIcon(vessel: RegisteredVessel, isSelected: boolean): L.DivIcon
         ? vessel.courseDeg
         : 0;
 
-  let fill = '#059669'; // live emerald
-  if (freshness.status === 'stale') fill = '#d97706'; // amber
-  else if (freshness.status === 'outdated') fill = '#dc2626'; // red
-  else if (freshness.status === 'manual_only') fill = '#2563eb'; // blue
-  else if (freshness.status === 'no_signal') fill = '#64748b'; // slate
+  const size = isSelected ? 40 : 32;
+  const speedText =
+    typeof vessel.speedKnots === 'number' ? `${vessel.speedKnots.toFixed(1)} kn` : 'N/A';
+  const courseText =
+    typeof vessel.courseDeg === 'number'
+      ? `${vessel.courseDeg.toFixed(1)}°`
+      : typeof vessel.headingDeg === 'number'
+        ? `${vessel.headingDeg}°`
+        : 'N/A';
+  const destText = vessel.aisDestination || vessel.destinationPort || 'Not reported';
+  const etaText = vessel.etaReported || vessel.etaManual || 'Pending';
+  const updatedText = vessel.lastAisUpdateAt
+    ? new Date(vessel.lastAisUpdateAt).toLocaleString()
+    : vessel.manualUpdatedAt
+      ? `Manual: ${new Date(vessel.manualUpdatedAt).toLocaleString()}`
+      : 'No AIS timestamp';
 
-  const size = isSelected ? 38 : 30;
-  const ring = isSelected ? 'box-shadow: 0 0 0 4px rgba(245,158,11,0.45);' : '';
+  return (
+    <>
+      <AdvancedMarker
+        ref={markerRef}
+        position={{ lat, lng }}
+        zIndex={isSelected ? 500 : 100}
+        title={`${vessel.name}${vessel.imo ? ` (IMO ${vessel.imo})` : ''}`}
+        onClick={() => onSelect(vessel.id)}
+      >
+        <div className="flex flex-col items-center -translate-y-1/2 cursor-pointer select-none">
+          <div
+            className="flex items-center justify-center rounded-full bg-slate-950/90 transition-transform hover:scale-110"
+            style={{
+              width: `${size}px`,
+              height: `${size}px`,
+              border: `2.5px solid ${fill}`,
+              boxShadow: isSelected
+                ? '0 0 0 5px rgba(245,158,11,0.45), 0 4px 12px rgba(0,0,0,0.55)'
+                : '0 2px 8px rgba(0,0,0,0.5)',
+            }}
+          >
+            <svg
+              width={Math.round(size * 0.6)}
+              height={Math.round(size * 0.6)}
+              viewBox="0 0 24 24"
+              style={{ transform: `rotate(${heading}deg)` }}
+              fill={fill}
+            >
+              <path
+                d="M12 2L19 20L12 16L5 20L12 2Z"
+                stroke="#ffffff"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </div>
+          <div className="mt-1 px-1.5 py-0.5 rounded bg-slate-950/85 border border-white/20 text-[10px] font-mono font-bold text-white whitespace-nowrap shadow-md">
+            {vessel.name}
+          </div>
+        </div>
+      </AdvancedMarker>
 
-  const html = `
-    <div style="width:${size}px;height:${size}px;display:flex;align-items:center;justify-content:center;border-radius:9999px;background:rgba(15,23,42,0.92);border:2px solid ${fill};${ring}transition:transform 0.2s;">
-      <svg width="${Math.round(size * 0.62)}" height="${Math.round(size * 0.62)}" viewBox="0 0 24 24" style="transform:rotate(${heading}deg);" fill="${fill}">
-        <path d="M12 2L19 20L12 16L5 20L12 2Z" stroke="#ffffff" stroke-width="1.4" stroke-linejoin="round" />
-      </svg>
-    </div>
-  `;
+      {isInfoOpen && marker && (
+        <InfoWindow anchor={marker} maxWidth={300} onCloseClick={onCloseInfo}>
+          <div className="min-w-[230px] text-xs text-slate-900 leading-snug space-y-2 p-0.5">
+            <div>
+              <div className="font-bold text-sm text-slate-950">{vessel.name}</div>
+              <div className="text-[11px] font-mono text-slate-500">
+                {vessel.imo ? `IMO ${vessel.imo}` : ''}
+                {vessel.imo && vessel.mmsi ? ' · ' : ''}
+                {vessel.mmsi ? `MMSI ${vessel.mmsi}` : ''}
+              </div>
+            </div>
 
-  return L.divIcon({
-    html,
-    className: 'auzio-vessel-marker',
-    iconSize: [size, size],
-    iconAnchor: [size / 2, size / 2],
-    popupAnchor: [0, -size / 2],
-  });
+            <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 bg-slate-50 border border-slate-200 rounded-md p-2">
+              <div>
+                <span className="block text-[10px] text-slate-500 uppercase">Speed</span>
+                <strong className="font-mono text-slate-950">{speedText}</strong>
+              </div>
+              <div>
+                <span className="block text-[10px] text-slate-500 uppercase">Course</span>
+                <strong className="font-mono text-slate-950">{courseText}</strong>
+              </div>
+              <div className="col-span-2">
+                <span className="block text-[10px] text-slate-500 uppercase">Destination</span>
+                <strong className="font-mono text-slate-950">{destText}</strong>
+              </div>
+              <div className="col-span-2">
+                <span className="block text-[10px] text-slate-500 uppercase">Reported ETA</span>
+                <strong className="font-mono text-slate-950">{etaText}</strong>
+              </div>
+            </div>
+
+            <div className="text-[11px] text-slate-700 space-y-0.5">
+              <div>
+                <strong>Coordinates:</strong>{' '}
+                <span className="font-mono">
+                  {lat.toFixed(4)}°, {lng.toFixed(4)}°
+                </span>
+              </div>
+              <div>
+                <strong>Status:</strong>{' '}
+                {isManual
+                  ? vessel.manualStatus || 'Manual Position'
+                  : formatNavigationalStatus(vessel.navStatus)}
+              </div>
+              <div>
+                <strong>Signal:</strong> {freshness.label}
+              </div>
+              <div className="text-[10px] text-slate-500 pt-0.5">Updated: {updatedText}</div>
+            </div>
+          </div>
+        </InfoWindow>
+      )}
+    </>
+  );
 }
+
+interface CameraControllerProps {
+  positionedVessels: PositionedVessel[];
+  selectedVesselId?: string | null;
+  fitRequestNonce: number;
+}
+
+function VesselMapCameraController({
+  positionedVessels,
+  selectedVesselId,
+  fitRequestNonce,
+}: CameraControllerProps) {
+  const map = useMap();
+
+  const fitFleet = useCallback(() => {
+    if (!map) return;
+    if (positionedVessels.length === 0) {
+      map.panTo(DEFAULT_CENTER);
+      map.setZoom(DEFAULT_ZOOM);
+      return;
+    }
+    if (positionedVessels.length === 1) {
+      const only = positionedVessels[0];
+      map.panTo({ lat: only.lat, lng: only.lng });
+      map.setZoom(10);
+      return;
+    }
+    let north = -90;
+    let south = 90;
+    let east = -180;
+    let west = 180;
+    positionedVessels.forEach((v) => {
+      if (v.lat > north) north = v.lat;
+      if (v.lat < south) south = v.lat;
+      if (v.lng > east) east = v.lng;
+      if (v.lng < west) west = v.lng;
+    });
+    map.fitBounds({ north, south, east, west }, 64);
+  }, [map, positionedVessels]);
+
+  // Smoothly focus selected vessel (or frame fleet when none selected)
+  useEffect(() => {
+    if (!map) return;
+    if (selectedVesselId) {
+      const target = positionedVessels.find((v) => v.vessel.id === selectedVesselId);
+      if (target) {
+        map.panTo({ lat: target.lat, lng: target.lng });
+        const currentZoom = map.getZoom() ?? DEFAULT_ZOOM;
+        if (currentZoom < 9) {
+          map.setZoom(10);
+        }
+        return;
+      }
+    }
+    fitFleet();
+  }, [map, positionedVessels, selectedVesselId, fitFleet]);
+
+  // Explicit "Fit Fleet" button click
+  useEffect(() => {
+    if (fitRequestNonce === 0) return;
+    fitFleet();
+  }, [fitRequestNonce, fitFleet]);
+
+  return null;
+}
+
+const MAP_STYLE_OPTIONS: Array<{
+  id: GoogleMapTypeId;
+  label: string;
+  title: string;
+  Icon: typeof Satellite;
+}> = [
+  { id: 'hybrid', label: 'Satellite', title: 'Google Satellite imagery with port & ocean labels', Icon: Satellite },
+  { id: 'satellite', label: 'Clean Sat', title: 'Pure Google Satellite imagery without labels', Icon: Globe },
+  { id: 'terrain', label: 'Terrain', title: 'Google Terrain topography map', Icon: Mountain },
+  { id: 'roadmap', label: 'Map', title: 'Google standard road & coastal map', Icon: MapIcon },
+];
 
 export function VesselLeafletMap({
   vessels,
@@ -89,211 +296,138 @@ export function VesselLeafletMap({
   onSelectVessel,
   heightClass = 'h-[460px]',
 }: VesselLeafletMapProps) {
-  const mapContainerRef = useRef<HTMLDivElement | null>(null);
-  const mapRef = useRef<L.Map | null>(null);
-  const markersLayerRef = useRef<L.LayerGroup | null>(null);
-  const seamarkLayerRef = useRef<L.TileLayer | null>(null);
-  const [showSeamarks, setShowSeamarks] = useState(true);
+  const [mapTypeId, setMapTypeId] = useState<GoogleMapTypeId>('hybrid');
+  const [openInfoVesselId, setOpenInfoVesselId] = useState<string | null>(selectedVesselId || null);
+  const [fitNonce, setFitNonce] = useState(0);
 
-  const positionedVessels = useMemo(() => {
+  const positionedVessels = useMemo<PositionedVessel[]>(() => {
     return vessels
       .map((vessel) => {
         const coords = getVesselCoordinates(vessel);
         return coords ? { vessel, ...coords } : null;
       })
-      .filter((item): item is NonNullable<typeof item> => Boolean(item));
+      .filter((item): item is PositionedVessel => Boolean(item));
   }, [vessels]);
 
-  // Initialize Leaflet map instance
   useEffect(() => {
-    if (!mapContainerRef.current || mapRef.current) return;
-
-    const map = L.map(mapContainerRef.current, {
-      center: [20, 95], // Centered over Indo-Pacific Japan -> Africa / Oceania export sea lanes
-      zoom: 3,
-      minZoom: 2,
-      maxZoom: 18,
-      worldCopyJump: true,
-    });
-
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      attribution:
-        '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener noreferrer">OpenStreetMap</a> contributors &copy; <a href="https://carto.com/attributions" target="_blank" rel="noopener noreferrer">CARTO</a>',
-      subdomains: 'abcd',
-      maxZoom: 19,
-    }).addTo(map);
-
-    const seamarks = L.tileLayer('https://tiles.openseamap.org/seamark/{z}/{x}/{y}.png', {
-      attribution:
-        'Sea marks &copy; <a href="https://www.openseamap.org/" target="_blank" rel="noopener noreferrer">OpenSeaMap</a>',
-      opacity: 0.75,
-      maxZoom: 18,
-    });
-    seamarks.addTo(map);
-    seamarkLayerRef.current = seamarks;
-
-    const markersGroup = L.layerGroup().addTo(map);
-    markersLayerRef.current = markersGroup;
-    mapRef.current = map;
-
-    // Ensure proper tile sizing after flex/grid layout paint
-    const resizeTimer = setTimeout(() => {
-      map.invalidateSize();
-    }, 150);
-
-    return () => {
-      clearTimeout(resizeTimer);
-      map.remove();
-      mapRef.current = null;
-      markersLayerRef.current = null;
-      seamarkLayerRef.current = null;
-    };
-  }, []);
-
-  // Toggle OpenSeaMap navigational seamark overlay
-  useEffect(() => {
-    const map = mapRef.current;
-    const seamarks = seamarkLayerRef.current;
-    if (!map || !seamarks) return;
-    if (showSeamarks) {
-      if (!map.hasLayer(seamarks)) seamarks.addTo(map);
-    } else if (map.hasLayer(seamarks)) {
-      map.removeLayer(seamarks);
-    }
-  }, [showSeamarks]);
-
-  // Render vessel markers & popups
-  useEffect(() => {
-    const map = mapRef.current;
-    const layer = markersLayerRef.current;
-    if (!map || !layer) return;
-
-    layer.clearLayers();
-
-    positionedVessels.forEach(({ vessel, lat, lon, isManual }) => {
-      const isSelected = vessel.id === selectedVesselId;
-      const freshness = getVesselFreshness(vessel);
-      const marker = L.marker([lat, lon], {
-        icon: buildShipIcon(vessel, isSelected),
-        zIndexOffset: isSelected ? 500 : 100,
-      });
-
-      const speedText =
-        typeof vessel.speedKnots === 'number' ? `${vessel.speedKnots.toFixed(1)} kn` : 'N/A';
-      const courseText =
-        typeof vessel.courseDeg === 'number'
-          ? `${vessel.courseDeg.toFixed(1)}°`
-          : typeof vessel.headingDeg === 'number'
-            ? `${vessel.headingDeg}°`
-            : 'N/A';
-      const destText = vessel.aisDestination || vessel.destinationPort || 'Not reported';
-      const etaText = vessel.etaReported || vessel.etaManual || 'Pending';
-      const updatedText = vessel.lastAisUpdateAt
-        ? new Date(vessel.lastAisUpdateAt).toLocaleString()
-        : vessel.manualUpdatedAt
-          ? `Manual: ${new Date(vessel.manualUpdatedAt).toLocaleString()}`
-          : 'No AIS timestamp';
-
-      const popupHtml = `
-        <div style="min-width:230px;font-family:system-ui,-apple-system,sans-serif;font-size:12px;color:#0f172a;line-height:1.45;">
-          <div style="font-weight:700;font-size:13px;margin-bottom:4px;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-            <span>${escapeHtml(vessel.name)}</span>
-          </div>
-          <div style="font-size:11px;color:#475569;margin-bottom:6px;font-family:ui-monospace,monospace;">
-            MMSI: ${escapeHtml(vessel.mmsi)}${vessel.imo ? ` · IMO: ${escapeHtml(vessel.imo)}` : ''}
-          </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;margin-bottom:6px;">
-            <div><span style="color:#64748b;font-size:10px;display:block;">SPEED</span><strong>${escapeHtml(speedText)}</strong></div>
-            <div><span style="color:#64748b;font-size:10px;display:block;">COURSE</span><strong>${escapeHtml(courseText)}</strong></div>
-            <div><span style="color:#64748b;font-size:10px;display:block;">DESTINATION</span><strong>${escapeHtml(destText)}</strong></div>
-            <div><span style="color:#64748b;font-size:10px;display:block;">REPORTED ETA</span><strong>${escapeHtml(etaText)}</strong></div>
-          </div>
-          <div style="font-size:11px;color:#334155;">
-            <div><strong>Status:</strong> ${escapeHtml(isManual ? vessel.manualStatus || 'Manual Position' : formatNavigationalStatus(vessel.navStatus))}</div>
-            <div><strong>Signal:</strong> ${escapeHtml(freshness.label)}</div>
-            <div style="color:#64748b;font-size:10px;margin-top:3px;">Updated: ${escapeHtml(updatedText)}</div>
-          </div>
-        </div>
-      `;
-
-      marker.bindPopup(popupHtml, { maxWidth: 290 });
-      marker.on('click', () => {
-        onSelectVessel?.(vessel.id);
-      });
-      marker.addTo(layer);
-
-      if (isSelected) {
-        marker.openPopup();
-      }
-    });
-
     if (selectedVesselId) {
-      const target = positionedVessels.find((v) => v.vessel.id === selectedVesselId);
-      if (target) {
-        map.flyTo([target.lat, target.lon], Math.max(map.getZoom(), 6), { duration: 0.9 });
-      }
-    } else if (positionedVessels.length === 1) {
-      const only = positionedVessels[0];
-      map.setView([only.lat, only.lon], 6);
-    } else if (positionedVessels.length > 1) {
-      const bounds = L.latLngBounds(positionedVessels.map((v) => [v.lat, v.lon] as [number, number]));
-      map.fitBounds(bounds, { padding: [48, 48], maxZoom: 7 });
+      setOpenInfoVesselId(selectedVesselId);
     }
-  }, [positionedVessels, selectedVesselId, onSelectVessel]);
+  }, [selectedVesselId]);
 
-  const handleFitAll = () => {
-    const map = mapRef.current;
-    if (!map) return;
-    if (positionedVessels.length === 0) {
-      map.setView([20, 95], 3);
-      return;
-    }
-    if (positionedVessels.length === 1) {
-      map.flyTo([positionedVessels[0].lat, positionedVessels[0].lon], 6, { duration: 0.7 });
-      return;
-    }
-    const bounds = L.latLngBounds(positionedVessels.map((v) => [v.lat, v.lon] as [number, number]));
-    map.fitBounds(bounds, { padding: [48, 48], maxZoom: 7 });
-  };
+  const handleSelect = useCallback(
+    (vesselId: string) => {
+      setOpenInfoVesselId(vesselId);
+      onSelectVessel?.(vesselId);
+    },
+    [onSelectVessel]
+  );
+
+  if (!GOOGLE_MAPS_API_KEY) {
+    return (
+      <div
+        className={`relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950 text-white flex items-center justify-center p-6 text-center ${heightClass}`}
+      >
+        <div className="max-w-md space-y-2">
+          <Layers className="w-8 h-8 text-amber-400 mx-auto" />
+          <div className="text-sm font-bold">Google Maps Satellite API Key Required</div>
+          <p className="text-xs text-slate-300">
+            Configure <span className="font-mono text-amber-300">VITE_GOOGLE_MAPS_API_KEY</span> in
+            your environment secrets to load live Google Maps satellite imagery.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
-    <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-900">
-      <div ref={mapContainerRef} className={`w-full ${heightClass} z-0`} />
+    <div className="relative rounded-xl overflow-hidden border border-slate-200 bg-slate-950">
+      <div className={`w-full ${heightClass}`}>
+        <APIProvider
+          apiKey={GOOGLE_MAPS_API_KEY}
+          libraries={['marker']}
+          language="en"
+          region="JP"
+        >
+          <GoogleMap
+            mapId="DEMO_MAP_ID"
+            mapTypeId={mapTypeId}
+            defaultCenter={DEFAULT_CENTER}
+            defaultZoom={DEFAULT_ZOOM}
+            minZoom={2}
+            maxZoom={20}
+            gestureHandling="greedy"
+            mapTypeControl={false}
+            streetViewControl={false}
+            fullscreenControl={true}
+            zoomControl={true}
+            scaleControl={true}
+            internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
+            className="w-full h-full"
+          >
+            <VesselMapCameraController
+              positionedVessels={positionedVessels}
+              selectedVesselId={selectedVesselId}
+              fitRequestNonce={fitNonce}
+            />
 
-      {/* Top-right Map Controls */}
-      <div className="absolute top-3 right-3 z-[400] flex items-center gap-2">
+            {positionedVessels.map((item) => (
+              <VesselMarkerItem
+                key={item.vessel.id}
+                item={item}
+                isSelected={item.vessel.id === selectedVesselId}
+                isInfoOpen={item.vessel.id === openInfoVesselId}
+                onSelect={handleSelect}
+                onCloseInfo={() => setOpenInfoVesselId(null)}
+              />
+            ))}
+          </GoogleMap>
+        </APIProvider>
+      </div>
+
+      {/* Top-left Google Satellite Layer Switcher */}
+      <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-1 bg-slate-950/85 backdrop-blur-md p-1 rounded-lg border border-white/15 shadow-lg">
+        {MAP_STYLE_OPTIONS.map(({ id, label, title, Icon }) => {
+          const active = mapTypeId === id;
+          return (
+            <button
+              key={id}
+              type="button"
+              title={title}
+              onClick={() => setMapTypeId(id)}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-md transition-colors cursor-pointer ${
+                active
+                  ? 'bg-amber-400 text-slate-950 shadow-xs'
+                  : 'text-slate-200 hover:bg-white/10 hover:text-white'
+              }`}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Top-right Fit Fleet Control (offset left of Google Fullscreen control) */}
+      <div className="absolute top-3 right-14 z-10">
         <button
           type="button"
-          onClick={() => setShowSeamarks((s) => !s)}
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold rounded-lg shadow-sm border transition-colors cursor-pointer ${
-            showSeamarks
-              ? 'bg-slate-900 text-white border-slate-700'
-              : 'bg-white/95 text-slate-700 border-slate-300 hover:bg-white'
-          }`}
-          title="Toggle OpenSeaMap Maritime Seamarks"
+          onClick={() => setFitNonce((n) => n + 1)}
+          className="inline-flex items-center gap-1.5 px-3 py-2 text-[11px] font-semibold bg-slate-950/85 backdrop-blur-md text-white border border-white/15 hover:bg-slate-900 rounded-lg shadow-lg cursor-pointer"
+          title="Fit all tracked vessels in view"
         >
-          <Layers className="w-3.5 h-3.5" />
-          Sea Marks
-        </button>
-        <button
-          type="button"
-          onClick={handleFitAll}
-          className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-[11px] font-semibold bg-white/95 text-slate-800 border border-slate-300 hover:bg-white rounded-lg shadow-sm cursor-pointer"
-          title="Fit all tracked vessels"
-        >
-          <Maximize2 className="w-3.5 h-3.5" />
+          <Maximize2 className="w-3.5 h-3.5 text-amber-400" />
           Fit Fleet
         </button>
       </div>
 
       {/* Empty Coordinates Overlay */}
       {positionedVessels.length === 0 && (
-        <div className="absolute bottom-3 left-3 z-[400] max-w-md bg-slate-950/90 backdrop-blur text-white px-3.5 py-2.5 rounded-lg border border-slate-700 text-xs">
-          <div className="font-semibold text-amber-400">Awaiting Real AIS Vessel Coordinates</div>
+        <div className="absolute bottom-7 left-3 z-10 max-w-md bg-slate-950/90 backdrop-blur text-white px-3.5 py-2.5 rounded-lg border border-slate-700 text-xs">
+          <div className="font-semibold text-amber-400">Live Satellite Map Ready</div>
           <p className="text-[11px] text-slate-300 mt-0.5">
-            No registered vessels currently have a live AIS or manual coordinate fix. Coordinates
-            appear automatically once AISStream broadcasts arrive or an operations coordinator posts
-            a manual checkpoint.
+            Enter a vessel IMO number, MMSI, or ship name above to locate and zoom directly onto
+            its live ocean position in Google Satellite view.
           </p>
         </div>
       )}

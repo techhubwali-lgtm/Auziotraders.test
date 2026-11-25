@@ -21,7 +21,7 @@ import {
   Trash2,
   XCircle,
 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { buildDynamicCurrencyList } from '../../data/currencies';
 import { auth } from '../../lib/firebase';
 import {
@@ -117,6 +117,16 @@ export function ApiIntegrationsPanel({
   const [newMarginPct, setNewMarginPct] = useState('1.5');
   const [fxSearch, setFxSearch] = useState('');
   const [savingMargins, setSavingMargins] = useState(false);
+
+  // Sync admin margin form when Firestore exchangeRates/latest cache loads or updates
+  useEffect(() => {
+    if (typeof fxCache?.globalMarginPct === 'number') {
+      setGlobalMarginInput(fxCache.globalMarginPct);
+    }
+    if (fxCache?.currencyMargins) {
+      setCustomMargins(fxCache.currencyMargins);
+    }
+  }, [fxCache?.globalMarginPct, fxCache?.currencyMargins]);
 
   // AISStream Test & Sync State
   const [aisTesting, setAisTesting] = useState(false);
@@ -956,14 +966,21 @@ export function ApiIntegrationsPanel({
                   Per-Currency Margin Overrides (%)
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <input
-                    type="text"
-                    maxLength={3}
+                  <select
+                    aria-label="Select currency for custom margin"
                     value={newMarginCurrency}
-                    onChange={(e) => setNewMarginCurrency(e.target.value.toUpperCase())}
-                    placeholder="ISO (e.g. KES)"
-                    className="w-28 px-3 py-1.5 text-xs font-mono uppercase bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
-                  />
+                    onChange={(e) => setNewMarginCurrency(e.target.value)}
+                    disabled={!canEditSettings}
+                    className="w-52 px-3 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 rounded-lg"
+                  >
+                    {buildDynamicCurrencyList(rawUsdRates)
+                      .filter((c) => c.code !== 'USD')
+                      .map((c) => (
+                        <option key={c.code} value={c.code}>
+                          {c.flag} {c.code} ({c.symbol}) — {c.name}
+                        </option>
+                      ))}
+                  </select>
                   <input
                     type="number"
                     step="0.1"

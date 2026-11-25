@@ -5,6 +5,7 @@ import type { LegalPolicyType } from './LegalPolicyModal';
 
 interface FooterProps {
   landingContent: LandingPageContent;
+  liveFxUpdatedAt?: string | null;
   onNavigateView: (
     view: AppView,
     opts?: { sourceMode?: 'curated' | 'live_auctions'; anchor?: string }
@@ -12,9 +13,27 @@ interface FooterProps {
   onOpenPolicy: (policy: LegalPolicyType) => void;
 }
 
-export function Footer({ landingContent, onNavigateView, onOpenPolicy }: FooterProps) {
+export function Footer({
+  landingContent,
+  liveFxUpdatedAt,
+  onNavigateView,
+  onOpenPolicy,
+}: FooterProps) {
   const year = new Date().getFullYear();
   const sanitizedWa = landingContent.contactWhatsapp.replace(/[^\d]/g, '');
+  const formattedFxDate = (() => {
+    if (!liveFxUpdatedAt) return null;
+    const d = new Date(liveFxUpdatedAt);
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toLocaleString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZoneName: 'short',
+    });
+  })();
 
   return (
     <footer className="bg-slate-950 text-slate-300 border-t border-slate-800 no-print">
@@ -164,19 +183,10 @@ export function Footer({ landingContent, onNavigateView, onOpenPolicy }: FooterP
               <li>
                 <button
                   type="button"
-                  onClick={() => onNavigateView('vessel_tracking')}
-                  className="text-slate-400 hover:text-amber-400 transition-colors cursor-pointer"
-                >
-                  Live Vessel Tracking
-                </button>
-              </li>
-              <li>
-                <button
-                  type="button"
                   onClick={() => onNavigateView('track')}
                   className="text-slate-400 hover:text-amber-400 transition-colors cursor-pointer"
                 >
-                  Track Your Order
+                  Track
                 </button>
               </li>
               <li>
@@ -265,14 +275,21 @@ export function Footer({ landingContent, onNavigateView, onOpenPolicy }: FooterP
             &copy; {year} Auzio Traders Co., Ltd. All rights reserved.
           </div>
           <div className="flex flex-wrap items-center gap-5">
-            <a
-              href="https://www.exchangerate-api.com"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-amber-400 transition-colors underline underline-offset-2"
-            >
-              Rates By Exchange Rate API
-            </a>
+            <span className="inline-flex items-center gap-1.5">
+              <a
+                href="https://www.exchangerate-api.com"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-amber-400 transition-colors underline underline-offset-2"
+              >
+                Rates By Exchange Rate API
+              </a>
+              {formattedFxDate && (
+                <span className="text-[11px] font-mono text-slate-600">
+                  (Updated {formattedFxDate})
+                </span>
+              )}
+            </span>
             <button
               type="button"
               onClick={() => onOpenPolicy('privacy')}

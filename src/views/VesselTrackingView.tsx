@@ -741,16 +741,15 @@ export function VesselTrackingView({
           </a>{' '}
           &amp; Global Maritime AIS feeds, rendered on{' '}
           <a
-            href="https://leafletjs.com/"
+            href="https://mapsplatform.google.com/?utm_campaign=gmp_mcp_codeassist_v1_aistudio"
             target="_blank"
             rel="noopener noreferrer"
             className="text-slate-900 font-semibold underline hover:text-amber-700"
           >
-            Leaflet
+            Google Maps Platform
           </a>{' '}
-          with OpenStreetMap / CARTO / OpenSeaMap maritime tiles. AIS positions depend on coastal
-          and satellite receiver coverage; always confirm official discharge schedules with your
-          Auzio Traders export coordinator.
+          Satellite imagery. AIS positions depend on coastal and satellite receiver coverage; always
+          confirm official discharge schedules with your Auzio Traders export coordinator.
         </p>
       </div>
     </div>

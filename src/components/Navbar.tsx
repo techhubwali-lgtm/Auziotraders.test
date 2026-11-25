@@ -52,6 +52,7 @@ function formatFxTimestamp(iso: string | null): string {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return iso;
     return d.toLocaleString('en-US', {
+      year: 'numeric',
       month: 'short',
       day: 'numeric',
       hour: '2-digit',
@@ -132,9 +133,27 @@ export function Navbar({
 
   const dashboardView: AppView = isStaffUser ? 'staff_console' : 'customer_portal';
 
-  const fxFooterNote = liveFx.ok
-    ? `Updated: ${formatFxTimestamp(liveFx.updatedAt)} · Rates By Exchange Rate API (exchangerate-api.com)${liveFx.stale ? ' · Saved cache' : ''}`
-    : liveFx.error || liveFx.message || 'Live FX unavailable — showing saved USD prices.';
+  const fxFooterNote = liveFx.ok ? (
+    <div className="space-y-1">
+      <div>
+        Updated: <span className="font-mono text-slate-700">{formatFxTimestamp(liveFx.updatedAt)}</span>
+        {liveFx.stale ? ' · Saved cache' : ''}
+      </div>
+      <div className="flex items-center justify-between gap-2 text-[10px] text-slate-500">
+        <span>{liveFx.supportedCount || Object.keys(liveFx.rates || {}).length} currencies · 24h cached</span>
+        <a
+          href="https://www.exchangerate-api.com"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-amber-700 transition-colors"
+        >
+          Rates By Exchange Rate API
+        </a>
+      </div>
+    </div>
+  ) : (
+    liveFx.error || liveFx.message || 'Live FX unavailable — showing saved USD prices.'
+  );
 
   const navLinks: Array<{
     id: string;
@@ -155,15 +174,9 @@ export function Navbar({
       onClick: () => onNavigateView('how_to_buy'),
     },
     {
-      id: 'vessel-tracking',
-      label: 'Vessel Tracking',
-      active: activeView === 'vessel_tracking',
-      onClick: () => onNavigateView('vessel_tracking'),
-    },
-    {
       id: 'track',
-      label: 'Track Order',
-      active: activeView === 'track',
+      label: 'Track',
+      active: activeView === 'track' || activeView === 'vessel_tracking',
       onClick: () => onNavigateView('track'),
     },
     {
@@ -241,13 +254,18 @@ export function Navbar({
                 onClick={onRefreshFx}
                 title={
                   liveFx.ok
-                    ? `Live FX updated ${formatFxTimestamp(liveFx.updatedAt)}. Click to refresh.`
+                    ? `Exchange rates updated ${formatFxTimestamp(liveFx.updatedAt)}. Click to refresh.`
                     : 'Refresh live exchange rates'
                 }
                 aria-label="Refresh live exchange rates"
-                className="p-1.5 rounded-md border border-slate-700 bg-slate-900 text-slate-300 hover:text-amber-400 hover:border-slate-500 transition-colors cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-md border border-slate-700 bg-slate-900 text-slate-300 hover:text-amber-400 hover:border-slate-500 transition-colors cursor-pointer"
               >
                 <RefreshCw className={`w-3.5 h-3.5 ${liveFx.loading ? 'animate-spin' : ''}`} />
+                {liveFx.ok && liveFx.updatedAt && (
+                  <span className="hidden xl:inline text-[10px] font-mono text-slate-400">
+                    FX {formatFxTimestamp(liveFx.updatedAt)}
+                  </span>
+                )}
               </button>
             </div>
           </div>
@@ -278,7 +296,7 @@ export function Navbar({
             </div>
           </button>
 
-          {/* Desktop Primary Navigation (5 Clean Consolidated Links) */}
+          {/* Desktop Primary Navigation (4 Clean Consolidated Links) */}
           <nav aria-label="Main navigation" className="hidden lg:flex items-center gap-1">
             {navLinks.map((item) => (
               <button
