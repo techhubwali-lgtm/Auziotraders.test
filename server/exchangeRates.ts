@@ -1,108 +1,191 @@
 /**
- * Live International Exchange Rate Proxy for AUZIO TRADERS.
+ * Live Global Currency Exchange Rates Service (Server-Side)
+ * Provider: ExchangeRate-API Open Access (https://www.exchangerate-api.com/docs/free)
+ * Endpoints:
+ *   - https://open.er-api.com/v6/latest/USD
+ *   - https://open.er-api.com/v6/latest/JPY
  *
- * Fetches real-time USD-based ISO 4217 rates from Open Exchange Rates (open.er-api.com),
- * caches them server-side for 60 minutes, and never fabricates or hardcodes fallback rates.
- * If the upstream FX service is unreachable, returns { ok: false, rates: { USD: 1 }, updatedAt: null }
- * so the frontend gracefully keeps original USD pricing with a transparent status indicator.
+ * - Connects strictly to the real ExchangeRate-API endpoints (zero fake fallback rates).
+ * - Automatically imports every ISO 4217 currency returned by the API.
+ * - Caches live snapshots for 24 hours in server memory (paired with 24h Firestore cache on client).
+ * - Preserves last live snapshot if the upstream API becomes temporarily unavailable.
  */
 
-export interface LiveExchangeRateResponse {
+export interface ExchangeRateSnapshot {
   ok: boolean;
   base: 'USD';
   rates: Record<string, number>;
+  jpyRates: Record<string, number>;
+  supportedCount: number;
   updatedAt: string | null;
   nextUpdateAt: string | null;
+  jpyUpdatedAt: string | null;
   provider: string;
+  attributionUrl: string;
+  attributionText: string;
   cached: boolean;
-  message?: string;
+  stale: boolean;
+  error?: string;
 }
 
-const FX_API_URL = 'https://open.er-api.com/v6/latest/USD';
-const CACHE_TTL_MS = 60 * 60 * 1000; // 1 hour
-
-interface FxCacheEntry {
-  data: LiveExchangeRateResponse;
-  expiresAt: number;
+export interface ExchangeRateTestResult {
+  ok: boolean;
+  testedAt: string;
+  latencyMs: number;
+  usdEndpointOk: boolean;
+  jpyEndpointOk: boolean;
+  supportedCount: number;
+  sampleUsdToJpy: number | null;
+  sampleJpyToUsd: number | null;
+  providerUpdatedAt: string | null;
+  providerNextUpdateAt: string | null;
+  error?: string;
 }
 
-let fxCache: FxCacheEntry | null = null;
+interface ErApiPayload {
+  result?: string;
+  base_code?: string;
+  time_last_update_utc?: string;
+  time_last_update_unix?: number;
+  time_next_update_utc?: string;
+  time_next_update_unix?: number;
+  rates?: Record<string, number>;
+  'error-type'?: string;
+}
 
-export async function getLiveExchangeRates(forceRefresh = false): Promise<LiveExchangeRateResponse> {
-  const now = Date.now();
-  if (!forceRefresh && fxCache && fxCache.expiresAt > now) {
-    return {
-      ...fxCache.data,
-      cached: true,
-    };
+const USD_ENDPOINT = 'https://open.er-api.com/v6/latest/USD';
+const JPY_ENDPOINT = 'https://open.er-api.com/v6/latest/JPY';
+const ATTRIBUTION_URL = 'https://www.exchangerate-api.com';
+const ATTRIBUTION_TEXT = 'Rates By Exchange Rate API';
+const CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+let cachedSnapshot: ExchangeRateSnapshot | null = null;
+let cachedAtMs = 0;
+
+function sanitizeRatesMap(
+  raw: Record<string, number> | undefined,
+  baseCode: string
+): Record<string, number> {
+  const cleaned: Record<string, number> = { [baseCode]: 1 };
+  if (!raw || typeof raw !== 'object') return cleaned;
+  for (const [code, val] of Object.entries(raw)) {
+    const upper = code.toUpperCase();
+    if (/^[A-Z]{3}$/.test(upper) && typeof val === 'number' && Number.isFinite(val) && val > 0) {
+      cleaned[upper] = val;
+    }
   }
+  return cleaned;
+}
 
+function parseProviderDate(utcString?: string, unixSec?: number): string | null {
+  if (typeof unixSec === 'number' && Number.isFinite(unixSec) && unixSec > 0) {
+    return new Date(unixSec * 1000).toISOString();
+  }
+  if (utcString) {
+    const parsed = Date.parse(utcString);
+    if (!Number.isNaN(parsed)) return new Date(parsed).toISOString();
+  }
+  return null;
+}
+
+async function fetchErApiEndpoint(url: string): Promise<ErApiPayload> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
-
-    const response = await fetch(FX_API_URL, {
+    const res = await fetch(url, {
       method: 'GET',
       headers: {
         Accept: 'application/json',
-        'User-Agent': 'AuzioTradersExportPortal/2.0',
+        'User-Agent': 'AuzioTraders-ExportPortal/2.0',
       },
       signal: controller.signal,
     });
+    if (!res.ok) {
+      throw new Error(`HTTP ${res.status} from ${url}`);
+    }
+    const json = (await res.json()) as ErApiPayload;
+    if (json.result !== 'success' || !json.rates || typeof json.rates !== 'object') {
+      throw new Error(json['error-type'] || `Invalid payload returned by ${url}`);
+    }
+    return json;
+  } finally {
     clearTimeout(timeout);
+  }
+}
 
-    if (!response.ok) {
-      throw new Error(`FX API HTTP ${response.status}`);
+export async function getLiveExchangeRates(forceRefresh = false): Promise<ExchangeRateSnapshot> {
+  const now = Date.now();
+  if (!forceRefresh && cachedSnapshot && now - cachedAtMs < CACHE_TTL_MS) {
+    return { ...cachedSnapshot, cached: true, stale: false };
+  }
+
+  try {
+    const [usdResult, jpyResult] = await Promise.allSettled([
+      fetchErApiEndpoint(USD_ENDPOINT),
+      fetchErApiEndpoint(JPY_ENDPOINT),
+    ]);
+
+    if (usdResult.status !== 'fulfilled') {
+      throw usdResult.reason instanceof Error
+        ? usdResult.reason
+        : new Error('USD exchange rate endpoint failed.');
     }
 
-    const payload = (await response.json()) as {
-      result?: string;
-      base_code?: string;
-      time_last_update_utc?: string;
-      time_last_update_unix?: number;
-      time_next_update_utc?: string;
-      rates?: Record<string, unknown>;
-    };
+    const usdJson = usdResult.value;
+    const usdRates = sanitizeRatesMap(usdJson.rates, 'USD');
 
-    if (payload.result !== 'success' || !payload.rates || typeof payload.rates !== 'object') {
-      throw new Error('Unexpected exchange-rate API response format.');
+    let jpyRates: Record<string, number> = { JPY: 1 };
+    let jpyUpdatedAt: string | null = null;
+    if (jpyResult.status === 'fulfilled') {
+      jpyRates = sanitizeRatesMap(jpyResult.value.rates, 'JPY');
+      jpyUpdatedAt =
+        parseProviderDate(
+          jpyResult.value.time_last_update_utc,
+          jpyResult.value.time_last_update_unix
+        ) || new Date().toISOString();
+    } else if (cachedSnapshot?.jpyRates && Object.keys(cachedSnapshot.jpyRates).length > 1) {
+      jpyRates = cachedSnapshot.jpyRates;
+      jpyUpdatedAt = cachedSnapshot.jpyUpdatedAt;
     }
 
-    const sanitizedRates: Record<string, number> = { USD: 1 };
-    for (const [code, rawVal] of Object.entries(payload.rates)) {
-      if (/^[A-Z]{3}$/.test(code) && typeof rawVal === 'number' && Number.isFinite(rawVal) && rawVal > 0) {
-        sanitizedRates[code] = rawVal;
-      }
-    }
+    const updatedAt =
+      parseProviderDate(usdJson.time_last_update_utc, usdJson.time_last_update_unix) ||
+      new Date().toISOString();
+    const nextUpdateAt =
+      parseProviderDate(usdJson.time_next_update_utc, usdJson.time_next_update_unix) ||
+      new Date(now + CACHE_TTL_MS).toISOString();
 
-    const updatedAt = payload.time_last_update_unix
-      ? new Date(payload.time_last_update_unix * 1000).toISOString()
-      : payload.time_last_update_utc || new Date().toISOString();
-
-    const result: LiveExchangeRateResponse = {
+    const snapshot: ExchangeRateSnapshot = {
       ok: true,
       base: 'USD',
-      rates: sanitizedRates,
+      rates: usdRates,
+      jpyRates,
+      supportedCount: Object.keys(usdRates).length,
       updatedAt,
-      nextUpdateAt: payload.time_next_update_utc || null,
-      provider: 'ExchangeRate-API (Open Access)',
+      nextUpdateAt,
+      jpyUpdatedAt,
+      provider: 'ExchangeRate-API (open.er-api.com)',
+      attributionUrl: ATTRIBUTION_URL,
+      attributionText: ATTRIBUTION_TEXT,
       cached: false,
+      stale: false,
+      error:
+        jpyResult.status === 'rejected'
+          ? `JPY base endpoint warning: ${jpyResult.reason instanceof Error ? jpyResult.reason.message : 'unavailable'}`
+          : undefined,
     };
 
-    fxCache = {
-      data: result,
-      expiresAt: now + CACHE_TTL_MS,
-    };
-
-    return result;
+    cachedSnapshot = snapshot;
+    cachedAtMs = now;
+    return snapshot;
   } catch (err) {
-    // If we have a previously fetched live rate snapshot within 12 hours, return it clearly flagged;
-    // otherwise return strictly { ok: false, rates: { USD: 1 } } with zero invented rates.
-    if (fxCache && now - (fxCache.expiresAt - CACHE_TTL_MS) < 12 * 60 * 60 * 1000) {
+    const message = err instanceof Error ? err.message : 'Unable to reach ExchangeRate-API';
+    if (cachedSnapshot) {
       return {
-        ...fxCache.data,
+        ...cachedSnapshot,
         cached: true,
-        message: 'Showing last verified live FX snapshot while exchange-rate feed reconnects.',
+        stale: true,
+        error: `Using last saved rates — upstream temporarily unavailable (${message})`,
       };
     }
 
@@ -110,14 +193,104 @@ export async function getLiveExchangeRates(forceRefresh = false): Promise<LiveEx
       ok: false,
       base: 'USD',
       rates: { USD: 1 },
+      jpyRates: { JPY: 1 },
+      supportedCount: 1,
       updatedAt: null,
       nextUpdateAt: null,
-      provider: 'ExchangeRate-API (Open Access)',
+      jpyUpdatedAt: null,
+      provider: 'ExchangeRate-API (open.er-api.com)',
+      attributionUrl: ATTRIBUTION_URL,
+      attributionText: ATTRIBUTION_TEXT,
       cached: false,
-      message:
-        err instanceof Error
-          ? `Live exchange rates temporarily unavailable (${err.message}). Displaying base USD prices.`
-          : 'Live exchange rates temporarily unavailable. Displaying base USD prices.',
+      stale: false,
+      error: message,
     };
   }
+}
+
+export async function testExchangeRateConnection(): Promise<ExchangeRateTestResult> {
+  const started = Date.now();
+  const testedAt = new Date().toISOString();
+  const [usdRes, jpyRes] = await Promise.allSettled([
+    fetchErApiEndpoint(USD_ENDPOINT),
+    fetchErApiEndpoint(JPY_ENDPOINT),
+  ]);
+  const latencyMs = Date.now() - started;
+
+  const usdOk = usdRes.status === 'fulfilled';
+  const jpyOk = jpyRes.status === 'fulfilled';
+
+  if (!usdOk && !jpyOk) {
+    const errMsg =
+      usdRes.status === 'rejected' && usdRes.reason instanceof Error
+        ? usdRes.reason.message
+        : 'Both USD and JPY endpoints failed.';
+    return {
+      ok: false,
+      testedAt,
+      latencyMs,
+      usdEndpointOk: false,
+      jpyEndpointOk: false,
+      supportedCount: 0,
+      sampleUsdToJpy: null,
+      sampleJpyToUsd: null,
+      providerUpdatedAt: null,
+      providerNextUpdateAt: null,
+      error: errMsg,
+    };
+  }
+
+  const usdJson = usdOk ? usdRes.value : null;
+  const jpyJson = jpyOk ? jpyRes.value : null;
+  const usdRates = usdJson ? sanitizeRatesMap(usdJson.rates, 'USD') : { USD: 1 };
+  const jpyRates = jpyJson ? sanitizeRatesMap(jpyJson.rates, 'JPY') : { JPY: 1 };
+
+  // Also refresh cache when both succeed
+  if (usdOk && usdJson) {
+    const updatedAt =
+      parseProviderDate(usdJson.time_last_update_utc, usdJson.time_last_update_unix) || testedAt;
+    const nextUpdateAt =
+      parseProviderDate(usdJson.time_next_update_utc, usdJson.time_next_update_unix) ||
+      new Date(Date.now() + CACHE_TTL_MS).toISOString();
+    cachedSnapshot = {
+      ok: true,
+      base: 'USD',
+      rates: usdRates,
+      jpyRates,
+      supportedCount: Object.keys(usdRates).length,
+      updatedAt,
+      nextUpdateAt,
+      jpyUpdatedAt: jpyJson
+        ? parseProviderDate(jpyJson.time_last_update_utc, jpyJson.time_last_update_unix) || testedAt
+        : null,
+      provider: 'ExchangeRate-API (open.er-api.com)',
+      attributionUrl: ATTRIBUTION_URL,
+      attributionText: ATTRIBUTION_TEXT,
+      cached: false,
+      stale: false,
+    };
+    cachedAtMs = Date.now();
+  }
+
+  return {
+    ok: usdOk && jpyOk,
+    testedAt,
+    latencyMs,
+    usdEndpointOk: usdOk,
+    jpyEndpointOk: jpyOk,
+    supportedCount: Object.keys(usdRates).length,
+    sampleUsdToJpy: typeof usdRates.JPY === 'number' ? usdRates.JPY : null,
+    sampleJpyToUsd: typeof jpyRates.USD === 'number' ? jpyRates.USD : null,
+    providerUpdatedAt: usdJson
+      ? parseProviderDate(usdJson.time_last_update_utc, usdJson.time_last_update_unix)
+      : null,
+    providerNextUpdateAt: usdJson
+      ? parseProviderDate(usdJson.time_next_update_utc, usdJson.time_next_update_unix)
+      : null,
+    error: !usdOk
+      ? `USD endpoint failed: ${usdRes.status === 'rejected' && usdRes.reason instanceof Error ? usdRes.reason.message : 'error'}`
+      : !jpyOk
+        ? `JPY endpoint failed: ${jpyRes.status === 'rejected' && jpyRes.reason instanceof Error ? jpyRes.reason.message : 'error'}`
+        : undefined,
+  };
 }

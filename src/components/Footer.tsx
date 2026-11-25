@@ -164,6 +164,15 @@ export function Footer({ landingContent, onNavigateView, onOpenPolicy }: FooterP
               <li>
                 <button
                   type="button"
+                  onClick={() => onNavigateView('vessel_tracking')}
+                  className="text-slate-400 hover:text-amber-400 transition-colors cursor-pointer"
+                >
+                  Live Vessel Tracking
+                </button>
+              </li>
+              <li>
+                <button
+                  type="button"
                   onClick={() => onNavigateView('track')}
                   className="text-slate-400 hover:text-amber-400 transition-colors cursor-pointer"
                 >
@@ -256,6 +265,14 @@ export function Footer({ landingContent, onNavigateView, onOpenPolicy }: FooterP
             &copy; {year} Auzio Traders Co., Ltd. All rights reserved.
           </div>
           <div className="flex flex-wrap items-center gap-5">
+            <a
+              href="https://www.exchangerate-api.com"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-amber-400 transition-colors underline underline-offset-2"
+            >
+              Rates By Exchange Rate API
+            </a>
             <button
               type="button"
               onClick={() => onOpenPolicy('privacy')}

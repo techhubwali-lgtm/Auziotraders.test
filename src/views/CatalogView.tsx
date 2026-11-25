@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowRight,
   Award,
+  Building2,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -23,6 +24,7 @@ import {
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { CatalogSidebar } from '../components/CatalogSidebar';
+import { DealerStockCatalog } from '../components/DealerStockCatalog';
 import {
   PRICE_TIERS,
   SearchFilterBanner,
@@ -35,26 +37,30 @@ import { EN_COPY } from '../i18n/en';
 import { fetchAuctionMeta, searchLiveAuctions } from '../services/auctionFeedService';
 import type {
   AuctionFeedTable,
+  CatalogSourceMode,
   CifBreakdown,
   CompanySettings,
   CurrencyCode,
+  DealerStockVehicle,
   LiveAuctionMetaResponse,
   Vehicle,
 } from '../types/portal';
 
 interface CatalogViewProps {
   vehicles: Vehicle[];
+  dealerStock?: DealerStockVehicle[];
   currency: CurrencyCode;
   selectedPortId: string;
   settings: CompanySettings;
   liveFxRates?: Record<string, number>;
-  externalSourceMode?: 'curated' | 'live_auctions';
+  externalSourceMode?: CatalogSourceMode;
   externalFilters?: Partial<CatalogFilterState> | null;
   externalSearchNonce?: number;
   embedded?: boolean;
   compareIds: string[];
   canImportToFirestore: boolean;
-  onSourceModeChange?: (mode: 'curated' | 'live_auctions') => void;
+  onSourceModeChange?: (mode: CatalogSourceMode) => void;
+  onDealerInquirySubmitted?: (code: string) => void;
   onRegisterLiveVehicles: (items: Vehicle[]) => void;
   onImportLiveLot: (vehicle: Vehicle) => void;
   onToggleCompare: (vehicleId: string) => void;
@@ -68,7 +74,6 @@ interface CatalogViewProps {
 }
 
 type SortKey = 'featured' | 'fob_asc' | 'fob_desc' | 'year_desc' | 'mileage_asc';
-type CatalogSourceMode = 'curated' | 'live_auctions';
 
 const INITIAL_FILTERS: CatalogFilterState = {
   searchQuery: '',
@@ -92,6 +97,7 @@ const JAPAN_ORIGIN_PORTS = ['Yokohama', 'Nagoya', 'Kobe', 'Osaka', 'Hakata'];
 
 export function CatalogView({
   vehicles,
+  dealerStock = [],
   currency,
   selectedPortId,
   settings,
@@ -103,6 +109,7 @@ export function CatalogView({
   compareIds,
   canImportToFirestore,
   onSourceModeChange,
+  onDealerInquirySubmitted,
   onRegisterLiveVehicles,
   onImportLiveLot,
   onToggleCompare,
@@ -669,6 +676,30 @@ export function CatalogView({
 
                 <button
                   type="button"
+                  onClick={() => setSourceMode('dealer_stock')}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold rounded-md border transition-colors cursor-pointer ${
+                    sourceMode === 'dealer_stock'
+                      ? 'bg-slate-950 text-amber-400 border-slate-950 shadow-xs'
+                      : 'bg-slate-50 text-slate-900 border-slate-300 hover:border-amber-600 hover:text-amber-800'
+                  }`}
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  <span>Japanese Dealer Stock</span>
+                  {dealerStock.filter((d) => d.status !== 'sold').length > 0 && (
+                    <span
+                      className={`font-mono text-[11px] px-1.5 py-0.5 rounded ${
+                        sourceMode === 'dealer_stock'
+                          ? 'bg-amber-500 text-slate-950'
+                          : 'bg-slate-200 text-slate-800'
+                      }`}
+                    >
+                      {dealerStock.filter((d) => d.status !== 'sold').length.toLocaleString()}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
                   onClick={() => {
                     setSourceMode('curated');
                     updateFilters({
@@ -922,6 +953,17 @@ export function CatalogView({
               </div>
             </div>
 
+            {/* Dedicated Japanese Dealer Stock Storefront (separate from Auction & Curated Stock) */}
+            {sourceMode === 'dealer_stock' ? (
+              <DealerStockCatalog
+                vehicles={dealerStock}
+                currency={currency}
+                selectedPortId={selectedPortId}
+                settings={settings}
+                onInquirySubmitted={onDealerInquirySubmitted}
+              />
+            ) : (
+              <>
             {/* Live Feed Error / Notice Banner */}
             {sourceMode === 'live_auctions' && liveError && !liveLoading && (
               <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-2.5 text-xs text-amber-950">
@@ -1315,6 +1357,8 @@ export function CatalogView({
                     </div>
                   </div>
                 )}
+              </>
+            )}
               </>
             )}
           </div>

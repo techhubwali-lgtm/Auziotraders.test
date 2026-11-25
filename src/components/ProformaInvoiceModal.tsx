@@ -23,8 +23,15 @@ export function ProformaInvoiceModal({
   const [consigneePhone, setConsigneePhone] = useState(draft.consigneePhone || '');
   const [consigneeEmail, setConsigneeEmail] = useState(draft.consigneeEmail || '');
 
-  const rates = settings.exchangeRates;
-  const fmt = (usd: number) => formatMoney(usd, draft.currency, rates);
+  const effectiveRates =
+    draft.currency !== 'USD' &&
+    typeof draft.lockedExchangeRate === 'number' &&
+    draft.lockedExchangeRate > 0
+      ? { ...settings.exchangeRates, [draft.currency]: draft.lockedExchangeRate }
+      : settings.exchangeRates;
+  const activeRate =
+    draft.currency === 'USD' ? 1 : effectiveRates[draft.currency] || null;
+  const fmt = (usd: number) => formatMoney(usd, draft.currency, effectiveRates);
 
   return (
     <div
@@ -152,6 +159,12 @@ export function ProformaInvoiceModal({
                   <span className="text-slate-500">Valid Until: </span>
                   <span>{draft.validUntilDate}</span>
                 </div>
+                {draft.currency !== 'USD' && activeRate && (
+                  <div className="pt-1 text-[11px] text-emerald-800 font-semibold">
+                    {draft.isRateLocked ? 'Locked FX: ' : 'Invoice FX: '}1 USD ={' '}
+                    {activeRate.toFixed(activeRate >= 100 ? 2 : 4)} {draft.currency}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -382,10 +395,13 @@ export function ProformaInvoiceModal({
             </p>
           </div>
 
-          <div className="pt-4 border-t border-slate-200 flex items-end justify-between text-[11px] text-slate-500">
+          <div className="pt-4 border-t border-slate-200 flex flex-wrap items-end justify-between gap-2 text-[11px] text-slate-500">
             <div>
               Issued electronically by {settings.companyName} Export Desk. Estimated ocean transit:{' '}
               {draft.cif.transitDaysRange}.
+              {draft.isRateLocked && draft.lockedRateDate && draft.currency !== 'USD'
+                ? ` Confirmed invoice exchange rate locked on ${draft.lockedRateDate.slice(0, 10)}.`
+                : ''}
             </div>
             <div className="font-mono text-slate-700 font-medium">
               Authorized Export Desk

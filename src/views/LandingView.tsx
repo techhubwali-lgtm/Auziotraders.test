@@ -31,10 +31,12 @@ import { formatMoney, getPortById } from '../data/ports';
 import { WORLD_COUNTRIES, getWorldCountryByCode } from '../data/worldCountriesPorts';
 import type {
   AppView,
+  CatalogSourceMode,
   CifBreakdown,
   CompanySettings,
   CurrencyCode,
   CustomerTestimonial,
+  DealerStockVehicle,
   LandingPageContent,
   LiveExchangeRateState,
   UserProfile,
@@ -44,12 +46,13 @@ import { CatalogView } from './CatalogView';
 
 interface LandingViewProps {
   vehicles: Vehicle[];
+  dealerStock: DealerStockVehicle[];
   currency: CurrencyCode;
   liveFx: LiveExchangeRateState;
   settings: CompanySettings;
   selectedCountryCode: string;
   selectedPortId: string;
-  catalogSourceMode: 'curated' | 'live_auctions';
+  catalogSourceMode: CatalogSourceMode;
   landingContent: LandingPageContent;
   testimonials: CustomerTestimonial[];
   compareIds: string[];
@@ -60,10 +63,11 @@ interface LandingViewProps {
   onOpenDashboard: () => void;
   onCountryChange: (countryCode: string) => void;
   onPortChange: (portId: string) => void;
-  onSourceModeChange: (mode: 'curated' | 'live_auctions') => void;
+  onSourceModeChange: (mode: CatalogSourceMode) => void;
+  onDealerInquirySubmitted?: (code: string) => void;
   onNavigateView: (
     view: AppView,
-    opts?: { sourceMode?: 'curated' | 'live_auctions'; anchor?: string }
+    opts?: { sourceMode?: CatalogSourceMode; anchor?: string }
   ) => void;
   onSelectVehicle: (vehicle: Vehicle) => void;
   onOpenProforma: (params: { vehicle: Vehicle; cif: CifBreakdown }) => void;
@@ -150,6 +154,7 @@ function AnimatedCounter({
 
 export function LandingView({
   vehicles,
+  dealerStock,
   currency,
   liveFx,
   settings,
@@ -167,6 +172,7 @@ export function LandingView({
   onCountryChange,
   onPortChange,
   onSourceModeChange,
+  onDealerInquirySubmitted,
   onNavigateView,
   onSelectVehicle,
   onOpenProforma,
@@ -551,7 +557,7 @@ export function LandingView({
                 .
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 onClick={() => onSourceModeChange('curated')}
@@ -575,6 +581,17 @@ export function LandingView({
                 <Gavel className="w-3.5 h-3.5" />
                 <span>Live Auctions</span>
               </button>
+              <button
+                type="button"
+                onClick={() => onSourceModeChange('dealer_stock')}
+                className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-bold transition-colors cursor-pointer ${
+                  catalogSourceMode === 'dealer_stock'
+                    ? 'bg-slate-950 text-amber-400'
+                    : 'bg-white border border-slate-300 text-slate-700 hover:border-amber-500'
+                }`}
+              >
+                <span>Japanese Dealer Stock</span>
+              </button>
             </div>
           </div>
         </div>
@@ -582,6 +599,7 @@ export function LandingView({
         <CatalogView
           embedded
           vehicles={vehicles}
+          dealerStock={dealerStock}
           currency={currency}
           selectedPortId={selectedPortId}
           settings={settings}
@@ -590,6 +608,7 @@ export function LandingView({
           compareIds={compareIds}
           canImportToFirestore={canImportToFirestore}
           onSourceModeChange={onSourceModeChange}
+          onDealerInquirySubmitted={onDealerInquirySubmitted}
           onRegisterLiveVehicles={onRegisterLiveVehicles}
           onImportLiveLot={onImportLiveLot}
           onToggleCompare={onToggleCompare}

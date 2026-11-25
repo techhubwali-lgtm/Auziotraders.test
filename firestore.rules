@@ -286,6 +286,43 @@ service cloud.firestore {
         getAfter(/databases/$(database)/documents/staffInvitations/$(request.resource.data.invitationId)).data.status == 'accepted';
     }
 
+    function isValidExchangeRateCache(data) {
+      return data.base == 'USD' &&
+        data.rates is map &&
+        data.globalMarginPct is number &&
+        data.globalMarginPct >= -20 &&
+        data.globalMarginPct <= 25 &&
+        (!('currencyMargins' in data) || data.currencyMargins is map) &&
+        isNonEmptyString(data.provider, 120) &&
+        isOptionalString(data.updatedAt, 64) &&
+        data.lastSyncStatus in ['ok', 'stale', 'error'];
+    }
+
+    function isValidVessel(data) {
+      return isNonEmptyString(data.name, 100) &&
+        data.mmsi is string && data.mmsi.matches('^[0-9]{9}$') &&
+        isOptionalString(data.imo, 20) &&
+        isOptionalString(data.callSign, 24) &&
+        isOptionalString(data.carrier, 80) &&
+        isOptionalString(data.voyageNumber, 40) &&
+        isOptionalString(data.originPort, 80) &&
+        isOptionalString(data.destinationPort, 100) &&
+        isOptionalString(data.manualStatus, 80) &&
+        isOptionalString(data.manualLocationNote, 500) &&
+        data.trackingEnabled is bool &&
+        (data.latitude == null || (data.latitude is number && data.latitude >= -90 && data.latitude <= 90)) &&
+        (data.longitude == null || (data.longitude is number && data.longitude >= -180 && data.longitude <= 180));
+    }
+
+    function isValidApiIntegrationConfig(data) {
+      return data.exchangeRateEnabled is bool &&
+        data.vesselTrackingEnabled is bool &&
+        data.commercialDisplayConfirmed is bool &&
+        isOptionalString(data.lastFxSyncAt, 64) &&
+        isOptionalString(data.lastAisSyncAt, 64) &&
+        (!('errorLogs' in data) || (data.errorLogs is list && data.errorLogs.size() <= 100));
+    }
+
     // =========================================================================
     // 1. User Profiles & Granular Role/Permission Registry
     // =========================================================================
@@ -682,6 +719,47 @@ service cloud.firestore {
       );
 
       allow delete: if isValidId(inviteId) && canAccessModule('users', 'delete', isAdmin());
+    }
+
+    // =========================================================================
+    // 16. Cached Exchange Rates (24h Firestore Cache + Admin Currency Margins)
+    // =========================================================================
+
+    match /exchangeRates/{docId} {
+      allow get: if docId == 'latest' || isStaff();
+      allow list: if isStaff();
+      allow create, update: if isValidId(docId) &&
+        docId == 'latest' &&
+        canAccessModule('settings', 'edit', isManagement() || isAccounts() || isIt()) &&
+        isValidExchangeRateCache(request.resource.data);
+      allow delete: if isValidId(docId) && isAdmin();
+    }
+
+    // =========================================================================
+    // 17. Registered Export Vessels & AISStream / Manual Position Tracking
+    // =========================================================================
+
+    match /vessels/{vesselId} {
+      // Publicly readable maritime telemetry (vessel name, MMSI/IMO, coordinates, ETA; zero customer PII)
+      allow get, list: if true;
+      allow create, update: if isValidId(vesselId) &&
+        canAccessModule('logistics', 'edit', isOperations() || isIt()) &&
+        isValidVessel(request.resource.data);
+      allow delete: if isValidId(vesselId) &&
+        canAccessModule('logistics', 'delete', isManagement() || isIt());
+    }
+
+    // =========================================================================
+    // 18. API Integrations Configuration & Error Logs (Staff Only; No Secrets)
+    // =========================================================================
+
+    match /apiIntegrations/{docId} {
+      allow get, list: if isStaff();
+      allow create, update: if isValidId(docId) &&
+        docId == 'config' &&
+        canAccessModule('settings', 'edit', isManagement() || isIt()) &&
+        isValidApiIntegrationConfig(request.resource.data);
+      allow delete: if isValidId(docId) && isAdmin();
     }
   }
 }

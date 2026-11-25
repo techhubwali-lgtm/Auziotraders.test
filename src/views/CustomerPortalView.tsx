@@ -11,6 +11,7 @@ import {
   Lock,
   MessageSquare,
   Package,
+  Radio,
   Send,
   ShieldCheck,
   Ship,
@@ -18,6 +19,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
+import { VesselLeafletMap } from '../components/VesselLeafletMap';
 import {
   ALL_CURRENCIES,
   calculateCif,
@@ -28,6 +30,7 @@ import {
   TRADE_MILESTONE_ORDER,
 } from '../data/ports';
 import { EN_COPY } from '../i18n/en';
+import { getVesselFreshness } from '../services/vesselTrackingService';
 import type {
   CifBreakdown,
   CompanySettings,
@@ -36,6 +39,7 @@ import type {
   ExportOrder,
   OrderMessage,
   Quotation,
+  RegisteredVessel,
   SourcingRequest,
   UserProfile,
   Vehicle,
@@ -58,6 +62,7 @@ interface CustomerPortalViewProps {
   sourcingRequests: SourcingRequest[];
   quotations: Quotation[];
   orders: ExportOrder[];
+  vessels?: RegisteredVessel[];
   messages: OrderMessage[];
   documents: ExportDocument[];
   prefillVehicle: Vehicle | null;
@@ -98,7 +103,16 @@ interface CustomerPortalViewProps {
     declineReason?: string;
   }) => Promise<void>;
   onSendOrderMessage: (orderId: string, body: string) => Promise<void>;
-  onOpenProforma: (params: { vehicle: Vehicle; cif: CifBreakdown; trackingCode?: string }) => void;
+  onOpenProforma: (params: {
+    vehicle: Vehicle;
+    cif: CifBreakdown;
+    trackingCode?: string;
+    currency?: CurrencyCode;
+    lockedExchangeRate?: number;
+    lockedRateDate?: string;
+    isRateLocked?: boolean;
+  }) => void;
+  onOpenVesselTracking?: () => void;
   onOpenCustomerLogin: () => void;
 }
 
@@ -112,6 +126,7 @@ export function CustomerPortalView({
   sourcingRequests,
   quotations,
   orders,
+  vessels = [],
   messages,
   documents,
   prefillVehicle,
@@ -122,6 +137,7 @@ export function CustomerPortalView({
   onRespondQuotation,
   onSendOrderMessage,
   onOpenProforma,
+  onOpenVesselTracking,
   onOpenCustomerLogin,
 }: CustomerPortalViewProps) {
   const fmt = (usd: number) => formatMoney(usd, currency, settings.exchangeRates);
@@ -337,6 +353,23 @@ export function CustomerPortalView({
   };
 
   const activeOrder = myOrders.find((o) => o.id === selectedOrderId) || myOrders[0] || null;
+  const activeOrderVessel = useMemo(() => {
+    if (!activeOrder || vessels.length === 0) return null;
+    if (activeOrder.vesselId) {
+      const byId = vessels.find((v) => v.id === activeOrder.vesselId);
+      if (byId) return byId;
+    }
+    if (activeOrder.vesselMmsi) {
+      const byMmsi = vessels.find((v) => v.mmsi === activeOrder.vesselMmsi);
+      if (byMmsi) return byMmsi;
+    }
+    if (activeOrder.vesselName) {
+      const needle = activeOrder.vesselName.trim().toLowerCase();
+      return vessels.find((v) => v.name.trim().toLowerCase() === needle) || null;
+    }
+    return null;
+  }, [activeOrder, vessels]);
+
   const activeOrderMessages = useMemo(
     () =>
       activeOrder
@@ -1217,6 +1250,10 @@ export function CustomerPortalView({
                           vehicle: matched,
                           cif,
                           trackingCode: activeOrder.trackingCode,
+                          currency: activeOrder.lockedCurrency || activeOrder.currency,
+                          lockedExchangeRate: activeOrder.lockedExchangeRate,
+                          lockedRateDate: activeOrder.lockedRateDate,
+                          isRateLocked: Boolean(activeOrder.lockedExchangeRate),
                         });
                       }}
                       className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-700 rounded-lg cursor-pointer"
@@ -1226,6 +1263,23 @@ export function CustomerPortalView({
                     </button>
                   </div>
 
+                  {activeOrder.lockedExchangeRate && (
+                    <div className="bg-emerald-50 border border-emerald-200 rounded-lg px-3.5 py-2.5 text-xs text-emerald-950 flex flex-wrap items-center justify-between gap-2">
+                      <span className="font-semibold">
+                        Confirmed Invoice Rate Locked: 1 USD ={' '}
+                        <span className="font-mono">
+                          {activeOrder.lockedExchangeRate.toFixed(4)}{' '}
+                          {activeOrder.lockedCurrency || activeOrder.currency}
+                        </span>
+                      </span>
+                      {activeOrder.lockedRateDate && (
+                        <span className="text-[11px] font-mono text-emerald-800">
+                          Locked {activeOrder.lockedRateDate.slice(0, 10)} · Unaffected by daily FX updates
+                        </span>
+                      )}
+                    </div>
+                  )}
+
                   {/* Vessel Schedule Card */}
                   <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
@@ -1233,12 +1287,24 @@ export function CustomerPortalView({
                         <Ship className="w-4 h-4 text-amber-600" />
                         Carrier &amp; Vessel Schedule (Staff-Verified)
                       </div>
-                      {activeOrder.scheduleIsEstimate && (
-                        <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-900 rounded">
-                          <AlertTriangle className="w-3 h-3" />
-                          Estimated Schedule (Subject to Carrier Confirmation)
-                        </span>
-                      )}
+                      <div className="flex items-center gap-2">
+                        {activeOrder.scheduleIsEstimate && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-900 rounded">
+                            <AlertTriangle className="w-3 h-3" />
+                            Estimated Schedule (Subject to Carrier Confirmation)
+                          </span>
+                        )}
+                        {onOpenVesselTracking && (
+                          <button
+                            type="button"
+                            onClick={onOpenVesselTracking}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-slate-900 bg-white border border-slate-300 hover:bg-slate-100 rounded-md cursor-pointer"
+                          >
+                            <Radio className="w-3 h-3 text-emerald-600" />
+                            Live Vessel Map
+                          </button>
+                        )}
+                      </div>
                     </div>
                     <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 text-xs">
                       <div>
@@ -1272,6 +1338,90 @@ export function CustomerPortalView({
                         </div>
                       </div>
                     </div>
+
+                    {activeOrderVessel && (() => {
+                      const freshness = getVesselFreshness(activeOrderVessel);
+                      return (
+                        <div className="pt-3 border-t border-slate-200 space-y-3">
+                          <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                            <span className="font-semibold text-slate-900">
+                              AIS Telemetry — MMSI {activeOrderVessel.mmsi}
+                              {activeOrderVessel.imo ? ` · IMO ${activeOrderVessel.imo}` : ''}
+                            </span>
+                            <span
+                              className={`px-2 py-0.5 text-[11px] font-semibold rounded ${
+                                freshness.status === 'live'
+                                  ? 'bg-emerald-100 text-emerald-900'
+                                  : freshness.status === 'stale' || freshness.status === 'outdated'
+                                    ? 'bg-amber-100 text-amber-900'
+                                    : freshness.status === 'manual_only'
+                                      ? 'bg-sky-100 text-sky-900'
+                                      : 'bg-slate-200 text-slate-700'
+                              }`}
+                            >
+                              {freshness.label}
+                            </span>
+                          </div>
+
+                          {(freshness.status === 'stale' || freshness.status === 'outdated') && (
+                            <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-950 flex items-center gap-2">
+                              <AlertTriangle className="w-3.5 h-3.5 shrink-0 text-amber-600" />
+                              <span>
+                                Vessel AIS position is outdated (last terrestrial/satellite report:{' '}
+                                {activeOrderVessel.lastAisUpdateAt
+                                  ? new Date(activeOrderVessel.lastAisUpdateAt).toLocaleString()
+                                  : 'Pending'}
+                                ). Showing last recorded coordinates.
+                              </span>
+                            </div>
+                          )}
+
+                          <VesselLeafletMap
+                            vessels={[activeOrderVessel]}
+                            selectedVesselId={activeOrderVessel.id}
+                            heightClass="h-[260px]"
+                          />
+
+                          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+                            <div className="bg-white border border-slate-200 rounded-lg p-2">
+                              <div className="text-slate-500">Speed (SOG)</div>
+                              <div className="font-mono font-bold text-slate-950">
+                                {typeof activeOrderVessel.speedKnots === 'number'
+                                  ? `${activeOrderVessel.speedKnots.toFixed(1)} kn`
+                                  : '—'}
+                              </div>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-lg p-2">
+                              <div className="text-slate-500">Course / Heading</div>
+                              <div className="font-mono font-bold text-slate-950">
+                                {typeof activeOrderVessel.courseDeg === 'number'
+                                  ? `${activeOrderVessel.courseDeg.toFixed(0)}°`
+                                  : '—'}
+                              </div>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-lg p-2">
+                              <div className="text-slate-500">AIS Destination</div>
+                              <div className="font-mono font-bold text-slate-950 truncate">
+                                {activeOrderVessel.aisDestination || activeOrderVessel.destinationPort || '—'}
+                              </div>
+                            </div>
+                            <div className="bg-white border border-slate-200 rounded-lg p-2">
+                              <div className="text-slate-500">Reported ETA</div>
+                              <div className="font-mono font-bold text-slate-950">
+                                {activeOrderVessel.etaReported || activeOrderVessel.etaManual || activeOrder.etaDate || 'TBD'}
+                              </div>
+                            </div>
+                          </div>
+
+                          {activeOrderVessel.manualLocationNote && (
+                            <div className="p-2.5 rounded-lg bg-sky-50 border border-sky-200 text-xs text-sky-950">
+                              <strong>Coordinator Update:</strong> {activeOrderVessel.manualStatus ? `[${activeOrderVessel.manualStatus}] ` : ''}
+                              {activeOrderVessel.manualLocationNote}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* 14-Stage Milestone Grid */}

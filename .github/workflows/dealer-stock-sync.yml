@@ -1,0 +1,63 @@
+name: Auzio Japanese Dealer Stock 6-Hour Sync
+
+on:
+  schedule:
+    # Runs every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      source:
+        description: 'Optional single source ID (e.g. flexnet or applenet). Leave blank for all active sources.'
+        required: false
+        default: ''
+      dry_run:
+        description: 'Run compliance dry-run without mutating inventory'
+        required: false
+        type: boolean
+        default: false
+      max_vehicles:
+        description: 'Max vehicles per source (1-100)'
+        required: false
+        default: '50'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: auzio-dealer-stock-sync
+  cancel-in-progress: false
+
+jobs:
+  sync-dealer-stock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Execute compliant server-side Japanese dealer extraction
+        env:
+          DEALER_SYNC_EMERGENCY_STOP: ${{ vars.DEALER_SYNC_EMERGENCY_STOP || 'false' }}
+          FIREBASE_PROJECT_ID: ${{ secrets.FIREBASE_PROJECT_ID }}
+        run: |
+          if [ "$DEALER_SYNC_EMERGENCY_STOP" = "true" ]; then
+            echo "Emergency Stop enabled — skipping scheduled dealer sync."
+            exit 0
+          fi
+          ARGS="--max=${{ github.event.inputs.max_vehicles || '50' }}"
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            ARGS="$ARGS --dry-run"
+          fi
+          if [ -n "${{ github.event.inputs.source }}" ]; then
+            ARGS="$ARGS --source=${{ github.event.inputs.source }}"
+          fi
+          npx tsx scripts/syncDealerStock.ts $ARGS

@@ -41,7 +41,11 @@ import {
   getWorldCountryByPortId,
 } from './data/worldCountriesPorts';
 import { auth, googleProvider } from './lib/firebase';
-import { fetchLiveExchangeRates } from './services/exchangeRateService';
+import {
+  applyExchangeMargins,
+  fetchLiveExchangeRates,
+  isFirestoreFxCacheStale,
+} from './services/exchangeRateService';
 import {
   adminUpdateUser,
   claimPendingStaffInvitation,
@@ -54,6 +58,7 @@ import {
   createSourcingRequest,
   createStaffInvitation,
   createTeamTask,
+  DEFAULT_API_INTEGRATION_CONFIG,
   deleteExportDocument,
   deleteFinanceRecord,
   deleteHrEmployee,
@@ -61,6 +66,7 @@ import {
   deleteTeamTask,
   deleteTestimonial,
   deleteVehicle,
+  deleteVessel,
   getUserProfile,
   placeAuctionBidWithGuard,
   postOrderMessage,
@@ -70,17 +76,22 @@ import {
   respondToQuotation,
   reviewHrLeaveRequest,
   revokeStaffInvitation,
+  saveApiIntegrationConfig,
   saveBankingDetailsProtected,
   saveCompanySettings,
+  saveExchangeRateCache,
   saveHrEmployee,
   saveLandingContent,
   saveSalesTarget,
   saveTestimonial,
+  saveVessel,
   seedFullTradeDatabase,
   submitBuyerInquiry,
+  subscribeApiIntegrationConfig,
   subscribeAuditLogs,
   subscribeCompanySettings,
   subscribeDocuments,
+  subscribeExchangeRateCache,
   subscribeFinanceRecords,
   subscribeHrEmployees,
   subscribeHrLeaveRequests,
@@ -88,16 +99,17 @@ import {
   subscribeLandingContent,
   subscribeOrderMessages,
   subscribeOrders,
+  subscribeOwnUserProfile,
   subscribeQuotations,
   subscribeSalesTargets,
   subscribeSourcingRequests,
   subscribeStaffInvitations,
-  subscribeOwnUserProfile,
   subscribeTeamMessages,
   subscribeTeamTasks,
   subscribeTestimonials,
   subscribeUsers,
   subscribeVehicles,
+  subscribeVessels,
   toggleDocumentVisibility,
   updateCustomerProfile,
   updateFinanceRecordStatus,
@@ -106,14 +118,26 @@ import {
   updateSourcingRequestStaff,
   updateTeamTaskStatus,
   updateVehicleStatus,
+  updateVesselAisTelemetry,
+  updateVesselManualUpdate,
 } from './services/firestoreService';
+import {
+  bootstrapAisFleet,
+  fetchAisPositions,
+  fetchAisStatus,
+  mergeVesselsWithLiveAis,
+  syncAisFilters,
+} from './services/vesselTrackingService';
 import type {
+  AisServiceStatusResponse,
+  ApiIntegrationConfig,
   AppView,
   AuditLogEntry,
   CifBreakdown,
   CompanySettings,
   CurrencyCode,
   CustomerTestimonial,
+  ExchangeRateCacheDoc,
   ExportDocument,
   ExportOrder,
   FinanceRecord,
@@ -122,9 +146,11 @@ import type {
   Inquiry,
   LandingPageContent,
   LiveExchangeRateState,
+  LiveVesselTelemetry,
   OrderMessage,
   ProformaDraft,
   Quotation,
+  RegisteredVessel,
   SalesTarget,
   ShippingMethod,
   SourcingOption,
@@ -142,6 +168,7 @@ import { LandingView } from './views/LandingView';
 import { OrderTrackerView } from './views/OrderTrackerView';
 import { ShippingRatesView } from './views/ShippingRatesView';
 import { StaffConsoleView } from './views/StaffConsoleView';
+import { VesselTrackingView } from './views/VesselTrackingView';
 
 const BOOTSTRAP_ADMIN_EMAIL = 'techhub.wali@gmail.com';
 const STORAGE_CURRENCY_KEY = 'auzio_currency_v2';
@@ -242,6 +269,13 @@ export default function App() {
 
   // Cloud Datasets
   const [cloudVehicles, setCloudVehicles] = useState<Vehicle[]>([]);
+  const [fxCache, setFxCache] = useState<ExchangeRateCacheDoc | null>(null);
+  const [cloudVessels, setCloudVessels] = useState<RegisteredVessel[]>([]);
+  const [integrationConfig, setIntegrationConfig] = useState<ApiIntegrationConfig>(
+    DEFAULT_API_INTEGRATION_CONFIG
+  );
+  const [aisStatus, setAisStatus] = useState<AisServiceStatusResponse | null>(null);
+  const [liveAisPositions, setLiveAisPositions] = useState<Record<string, LiveVesselTelemetry>>({});
   const [settings, setSettings] = useState<CompanySettings>(DEFAULT_COMPANY_SETTINGS);
   const [landingContent, setLandingContent] = useState<LandingPageContent>(DEFAULT_LANDING_CONTENT);
   const [testimonials, setTestimonials] = useState<CustomerTestimonial[]>([]);
@@ -350,6 +384,7 @@ export default function App() {
     setLiveFx((prev) => ({ ...prev, loading: true }));
     const res = await fetchLiveExchangeRates(force);
     setLiveFx(res);
+    return res;
   }, []);
 
   useEffect(() => {
@@ -367,17 +402,59 @@ export default function App() {
     }
   }, [landingContent.seoTitle, landingContent.seoDescription]);
 
-  // Merge live FX rates into settings passed to child views (keep accounting USD base intact)
+  // Resolve effective live FX state (Live API -> Firestore 24h cache fallback -> Apply Admin margins)
+  const effectiveLiveFx = useMemo<LiveExchangeRateState>(() => {
+    const globalMarginPct = fxCache?.globalMarginPct ?? 0;
+    const currencyMargins = fxCache?.currencyMargins ?? {};
+
+    if (liveFx.ok && Object.keys(liveFx.rates || {}).length > 1) {
+      return {
+        ...liveFx,
+        rates: applyExchangeMargins(liveFx.rates, globalMarginPct, currencyMargins),
+        rawRates: liveFx.rates,
+        globalMarginPct,
+        currencyMargins,
+      };
+    }
+
+    if (fxCache && Object.keys(fxCache.rates || {}).length > 1) {
+      return {
+        ok: true,
+        loading: liveFx.loading,
+        base: 'USD',
+        rates: applyExchangeMargins(fxCache.rates, globalMarginPct, currencyMargins),
+        rawRates: fxCache.rates,
+        jpyRates: fxCache.jpyRates,
+        supportedCount: fxCache.supportedCount || Object.keys(fxCache.rates).length,
+        updatedAt: fxCache.updatedAt || null,
+        nextUpdateAt: fxCache.nextUpdateAt || null,
+        jpyUpdatedAt: fxCache.jpyUpdatedAt || null,
+        provider: fxCache.provider || 'ExchangeRate-API (Saved Firestore Cache)',
+        attributionUrl: fxCache.attributionUrl || 'https://www.exchangerate-api.com',
+        source: 'firestore_cache',
+        stale: true,
+        globalMarginPct,
+        currencyMargins,
+        error:
+          liveFx.error ||
+          'Live ExchangeRate-API temporarily unreachable — serving previously saved Firestore rates.',
+      };
+    }
+
+    return liveFx;
+  }, [liveFx, fxCache]);
+
+  // Merge effective (margin-adjusted) FX rates into settings passed to child views
   const effectiveSettings = useMemo<CompanySettings>(() => {
-    if (!liveFx.ok) return settings;
+    if (!effectiveLiveFx.ok) return settings;
     return {
       ...settings,
       exchangeRates: {
         ...settings.exchangeRates,
-        ...liveFx.rates,
+        ...effectiveLiveFx.rates,
       },
     };
-  }, [settings, liveFx]);
+  }, [settings, effectiveLiveFx]);
 
   // Resolve real Firebase Auth session, enforce immediate suspension & claim pending staff invitations
   useEffect(() => {
@@ -479,10 +556,14 @@ export default function App() {
     const unsubV = subscribeVehicles((list) => setCloudVehicles(list));
     const unsubS = subscribeCompanySettings((s) => setSettings(s));
     const unsubL = subscribeLandingContent((c) => setLandingContent(c));
+    const unsubFx = subscribeExchangeRateCache((cache) => setFxCache(cache));
+    const unsubVessels = subscribeVessels((list) => setCloudVessels(list));
     return () => {
       unsubV();
       unsubS();
       unsubL();
+      unsubFx();
+      unsubVessels();
     };
   }, []);
 
@@ -535,12 +616,14 @@ export default function App() {
       unsubs.push(subscribeTeamTasks(true, setCloudTeamTasks));
       unsubs.push(subscribeTeamMessages(true, setCloudTeamMessages));
       unsubs.push(subscribeSalesTargets(true, setCloudSalesTargets));
+      unsubs.push(subscribeApiIntegrationConfig(true, setIntegrationConfig));
     } else {
       setCloudUsers([]);
       setCloudInquiries([]);
       setCloudTeamTasks([]);
       setCloudTeamMessages([]);
       setCloudSalesTargets([]);
+      setIntegrationConfig(DEFAULT_API_INTEGRATION_CONFIG);
     }
 
     if (canViewUsers) {
@@ -573,6 +656,181 @@ export default function App() {
       unsubs.forEach((u) => u());
     };
   }, [realStaff, canViewUsers, canViewFinance, canViewHr, canViewAudit, realCustomerUid]);
+
+  // Staff capability checks for ExchangeRate cache writes & Vessel AIS persistence
+  const canPersistFxCache = Boolean(
+    realStaff &&
+      (effectiveRole === 'admin' ||
+        effectiveRole === 'management' ||
+        effectiveRole === 'accounts' ||
+        effectiveRole === 'it' ||
+        hasModulePermission(effectiveRole, activeProfile, 'settings', 'edit'))
+  );
+  const canPersistVessels = Boolean(
+    realStaff &&
+      (effectiveRole === 'admin' ||
+        effectiveRole === 'management' ||
+        effectiveRole === 'operations' ||
+        effectiveRole === 'it' ||
+        hasModulePermission(effectiveRole, activeProfile, 'logistics', 'edit'))
+  );
+
+  // Persist fresh ExchangeRate-API snapshot to Firestore every 24h when authorized staff is active
+  const persistExchangeRateSnapshot = useCallback(
+    async (fx: LiveExchangeRateState) => {
+      if (!canPersistFxCache || !fx.ok || Object.keys(fx.rates || {}).length < 2) return;
+      await saveExchangeRateCache({
+        base: 'USD',
+        rates: fx.rates,
+        jpyRates: fx.jpyRates || { JPY: 1 },
+        supportedCount: fx.supportedCount || Object.keys(fx.rates).length,
+        globalMarginPct: fxCache?.globalMarginPct ?? 0,
+        currencyMargins: fxCache?.currencyMargins ?? {},
+        provider: fx.provider || 'ExchangeRate-API (open.er-api.com)',
+        attributionUrl: fx.attributionUrl || 'https://www.exchangerate-api.com',
+        updatedAt: fx.updatedAt || new Date().toISOString(),
+        nextUpdateAt: fx.nextUpdateAt || '',
+        jpyUpdatedAt: fx.jpyUpdatedAt || '',
+        lastSyncStatus: 'ok',
+        lastError: '',
+      });
+    },
+    [canPersistFxCache, fxCache?.globalMarginPct, fxCache?.currencyMargins]
+  );
+
+  useEffect(() => {
+    if (
+      canPersistFxCache &&
+      integrationConfig.exchangeRateEnabled &&
+      liveFx.ok &&
+      isFirestoreFxCacheStale(fxCache)
+    ) {
+      void persistExchangeRateSnapshot(liveFx);
+    }
+  }, [
+    canPersistFxCache,
+    integrationConfig.exchangeRateEnabled,
+    liveFx,
+    fxCache,
+    persistExchangeRateSnapshot,
+  ]);
+
+  const handleManualFxRefresh = useCallback(async () => {
+    const fresh = await loadExchangeRates(true);
+    if (fresh.ok && canPersistFxCache) {
+      await persistExchangeRateSnapshot(fresh);
+      if (realStaff) {
+        await saveApiIntegrationConfig({
+          ...integrationConfig,
+          lastFxSyncAt: new Date().toISOString(),
+        });
+      }
+      notify(`Exchange rates synced (${Object.keys(fresh.rates).length} currencies cached to Firestore)`);
+    } else if (!fresh.ok) {
+      notify('Live FX API unreachable — serving saved Firestore exchange rates');
+    }
+  }, [
+    loadExchangeRates,
+    canPersistFxCache,
+    persistExchangeRateSnapshot,
+    realStaff,
+    integrationConfig,
+    notify,
+  ]);
+
+  // AISStream Vessel Tracking: merge Firestore vessels with live server-side AIS telemetry
+  const mergedVessels = useMemo(
+    () => mergeVesselsWithLiveAis(cloudVessels, liveAisPositions),
+    [cloudVessels, liveAisPositions]
+  );
+
+  const refreshAisTracking = useCallback(async () => {
+    try {
+      const [statusRes, posRes] = await Promise.all([fetchAisStatus(), fetchAisPositions()]);
+      if (statusRes) setAisStatus(statusRes);
+      if (posRes) setLiveAisPositions(posRes);
+    } catch {
+      // Non-blocking fallback to persisted Firestore vessel data
+    }
+  }, []);
+
+  // Poll live AIS positions when viewing vessel tracking, order tracker, customer orders, or staff console
+  useEffect(() => {
+    const needsAisPoll =
+      activeView === 'vessel_tracking' ||
+      activeView === 'track' ||
+      activeView === 'customer_portal' ||
+      activeView === 'staff_console' ||
+      cloudVessels.length > 0;
+    if (!needsAisPoll) return;
+    void refreshAisTracking();
+    const timer = setInterval(() => {
+      void refreshAisTracking();
+    }, 30000);
+    return () => clearInterval(timer);
+  }, [activeView, cloudVessels.length, refreshAisTracking]);
+
+  // Bootstrap public registered fleet MMSIs if backend restarted before any staff user logged in
+  useEffect(() => {
+    if (realStaff || cloudVessels.length === 0) return;
+    const activeMmsis = cloudVessels
+      .filter((v) => v.trackingEnabled && /^\d{9}$/.test(v.mmsi))
+      .map((v) => v.mmsi);
+    if (activeMmsis.length === 0) return;
+    void bootstrapAisFleet(activeMmsis).then((status) => {
+      if (status) setAisStatus(status);
+    });
+  }, [realStaff, cloudVessels]);
+
+  // Sync registered active 9-digit MMSIs to backend AISStream manager whenever staff & vessels are ready
+  useEffect(() => {
+    if (!realStaff || !firebaseUser) return;
+    const activeMmsis = cloudVessels
+      .filter((v) => v.trackingEnabled && /^\d{9}$/.test(v.mmsi))
+      .map((v) => v.mmsi);
+    let cancelled = false;
+    void (async () => {
+      try {
+        const token = await firebaseUser.getIdToken();
+        if (cancelled) return;
+        const updatedStatus = await syncAisFilters(token, {
+          enabled: integrationConfig.vesselTrackingEnabled,
+          mmsis: activeMmsis,
+        });
+        if (!cancelled && updatedStatus) {
+          setAisStatus(updatedStatus);
+        }
+      } catch {
+        // Ignore transient filter sync errors
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [realStaff, firebaseUser, cloudVessels, integrationConfig.vesselTrackingEnabled]);
+
+  // Persist newer live AIS telemetry into Firestore vessels/{vesselId}
+  const handlePersistLiveAisToFirestore = useCallback(async (): Promise<number> => {
+    if (!canPersistVessels) return 0;
+    let updatedCount = 0;
+    for (const v of cloudVessels) {
+      const live = liveAisPositions[v.mmsi];
+      if (!live || !live.lastAisUpdateAt) continue;
+      const liveTs = Date.parse(live.lastAisUpdateAt);
+      const savedTs = v.lastAisUpdateAt ? Date.parse(v.lastAisUpdateAt) : 0;
+      if (!Number.isNaN(liveTs) && liveTs > savedTs) {
+        await updateVesselAisTelemetry(v, live);
+        updatedCount += 1;
+      }
+    }
+    return updatedCount;
+  }, [canPersistVessels, cloudVessels, liveAisPositions]);
+
+  // Auto-save fresher live AIS positions to Firestore when an authorized staff member is online
+  useEffect(() => {
+    if (!canPersistVessels || Object.keys(liveAisPositions).length === 0) return;
+    void handlePersistLiveAisToFirestore();
+  }, [canPersistVessels, liveAisPositions, handlePersistLiveAisToFirestore]);
 
   // Resolved datasets
   const vehicles = useMemo(
@@ -881,7 +1139,7 @@ export default function App() {
     });
   };
 
-  // Proforma Invoice trigger
+  // Proforma Invoice trigger (preserves confirmed invoice exchange rates when locked)
   const openProformaForVehicle = (params: {
     vehicle: Vehicle;
     cif: CifBreakdown;
@@ -890,15 +1148,25 @@ export default function App() {
     consigneePhone?: string;
     consigneeEmail?: string;
     trackingCode?: string;
+    currency?: CurrencyCode;
+    lockedExchangeRate?: number;
+    lockedRateDate?: string;
+    isRateLocked?: boolean;
   }) => {
     const today = new Date().toISOString().slice(0, 10);
+    const targetCurrency = params.currency || currency;
+    const currentAppliedRate =
+      effectiveSettings.exchangeRates[targetCurrency] || (targetCurrency === 'USD' ? 1 : undefined);
     setProformaDraft({
       invoiceNumber: createInvoiceNumber(),
       issueDate: today,
       validUntilDate: addDaysIso(effectiveSettings.invoiceValidityDays || 14),
       vehicle: params.vehicle,
       cif: params.cif,
-      currency,
+      currency: targetCurrency,
+      lockedExchangeRate: params.lockedExchangeRate || currentAppliedRate,
+      lockedRateDate: params.lockedRateDate || effectiveLiveFx.updatedAt || today,
+      isRateLocked: params.isRateLocked ?? Boolean(params.lockedExchangeRate),
       consigneeName:
         params.consigneeName || activeProfile?.companyName || activeProfile?.displayName || '',
       consigneeAddress: params.consigneeAddress || activeProfile?.consigneeAddress || '',
@@ -965,7 +1233,7 @@ export default function App() {
             currency={currency}
             selectedCountryCode={selectedCountryCode}
             selectedPortId={selectedPortId}
-            liveFx={liveFx}
+            liveFx={effectiveLiveFx}
             landingContent={landingContent}
             isAuthenticated={isAuthenticated}
             userRole={effectiveRole}
@@ -974,7 +1242,7 @@ export default function App() {
             onCurrencyChange={handleCurrencyChange}
             onCountryChange={handleCountryChange}
             onPortChange={(pid) => handlePortChange(pid)}
-            onRefreshFx={() => void loadExchangeRates(true)}
+            onRefreshFx={() => void handleManualFxRefresh()}
             onOpenLogin={openAuthModal}
             onSignOut={() => void handleSignOut()}
           />
@@ -1016,7 +1284,7 @@ export default function App() {
             <LandingView
               vehicles={vehicles}
               currency={currency}
-              liveFx={liveFx}
+              liveFx={effectiveLiveFx}
               settings={effectiveSettings}
               selectedCountryCode={selectedCountryCode}
               selectedPortId={selectedPortId}
@@ -1104,7 +1372,33 @@ export default function App() {
           )}
 
           {activeView === 'track' && (
-            <OrderTrackerView initialCode={trackerInitialCode} settings={effectiveSettings} />
+            <OrderTrackerView
+              initialCode={trackerInitialCode}
+              settings={effectiveSettings}
+              vessels={mergedVessels}
+              orders={orders}
+              onOpenVesselTracking={() => handleNavigateView('vessel_tracking')}
+            />
+          )}
+
+          {activeView === 'vessel_tracking' && (
+            <VesselTrackingView
+              vessels={mergedVessels}
+              liveAisPositions={liveAisPositions}
+              aisStatus={aisStatus}
+              orders={orders}
+              canRegisterVessels={canPersistVessels}
+              onQuickRegisterVessel={async (v) => {
+                const { id: _ignore, createdAt: _c, updatedAt: _u, ...payload } = v;
+                await saveVessel(payload);
+                notify(`Saved ${v.name} (MMSI ${v.mmsi}) to Fleet Roster in Firestore`);
+              }}
+              onRefreshPositions={refreshAisTracking}
+              onOpenOrderTracker={(code) => {
+                if (code) setTrackerInitialCode(code);
+                handleNavigateView('track');
+              }}
+            />
           )}
 
           {activeView === 'customer_portal' && (
@@ -1118,17 +1412,35 @@ export default function App() {
               sourcingRequests={sourcingRequests}
               quotations={quotations}
               orders={orders}
+              vessels={mergedVessels}
               messages={messages}
               documents={documents}
               prefillVehicle={prefillSourcingVehicle}
               isLiveFirestoreMode={isLiveFirestoreMode}
               onClearPrefillVehicle={() => setPrefillSourcingVehicle(null)}
+              onOpenVesselTracking={() => handleNavigateView('vessel_tracking')}
               onOpenCustomerLogin={() => {
                 setAuthError('');
                 setLoginModalOpen(true);
               }}
-              onOpenProforma={({ vehicle, cif, trackingCode }) =>
-                openProformaForVehicle({ vehicle, cif, trackingCode })
+              onOpenProforma={({
+                vehicle,
+                cif,
+                trackingCode,
+                currency: lockedCurrency,
+                lockedExchangeRate,
+                lockedRateDate,
+                isRateLocked,
+              }) =>
+                openProformaForVehicle({
+                  vehicle,
+                  cif,
+                  trackingCode,
+                  currency: lockedCurrency,
+                  lockedExchangeRate,
+                  lockedRateDate,
+                  isRateLocked,
+                })
               }
               onSaveProfile={async (updates) => {
                 if (!activeProfile) return;
@@ -1240,7 +1552,11 @@ export default function App() {
               staffProfile={activeProfile}
               currency={currency}
               settings={effectiveSettings}
-              liveFx={liveFx}
+              liveFx={effectiveLiveFx}
+              fxCache={fxCache}
+              integrationConfig={integrationConfig}
+              vessels={mergedVessels}
+              aisStatus={aisStatus}
               isLiveFirestoreMode={isLiveFirestoreMode}
               vehicles={vehicles}
               users={users}
@@ -1260,7 +1576,78 @@ export default function App() {
               staffInvitations={cloudStaffInvitations}
               landingContent={landingContent}
               testimonials={testimonials}
-              onRefreshFx={() => void loadExchangeRates(true)}
+              onRefreshFx={handleManualFxRefresh}
+              onSaveFxMargins={async (globalMarginPct, currencyMargins) => {
+                const baseRates =
+                  effectiveLiveFx.rawRates ||
+                  fxCache?.rates ||
+                  liveFx.rates ||
+                  effectiveSettings.exchangeRates;
+                await saveExchangeRateCache({
+                  base: 'USD',
+                  rates: baseRates,
+                  jpyRates: fxCache?.jpyRates || liveFx.jpyRates || { JPY: 1 },
+                  supportedCount: Object.keys(baseRates).length,
+                  globalMarginPct,
+                  currencyMargins,
+                  provider:
+                    fxCache?.provider ||
+                    liveFx.provider ||
+                    'ExchangeRate-API (open.er-api.com)',
+                  attributionUrl:
+                    fxCache?.attributionUrl || 'https://www.exchangerate-api.com',
+                  updatedAt:
+                    fxCache?.updatedAt || liveFx.updatedAt || new Date().toISOString(),
+                  nextUpdateAt: fxCache?.nextUpdateAt || liveFx.nextUpdateAt || '',
+                  jpyUpdatedAt: fxCache?.jpyUpdatedAt || liveFx.jpyUpdatedAt || '',
+                  lastSyncStatus: 'ok',
+                  lastError: '',
+                });
+                notify('Currency margins saved and applied across the portal');
+              }}
+              onSaveIntegrationConfig={async (next) => {
+                await saveApiIntegrationConfig(next);
+                setIntegrationConfig(next);
+                notify('API integration configuration saved');
+              }}
+              onSaveVessel={async (input, existingId) => {
+                await saveVessel(input, existingId);
+                notify(
+                  existingId
+                    ? `Updated vessel ${input.name} (MMSI ${input.mmsi})`
+                    : `Registered vessel ${input.name} (MMSI ${input.mmsi}) for AIS tracking`
+                );
+              }}
+              onDeleteVessel={async (vesselId) => {
+                await deleteVessel(vesselId);
+                notify('Removed vessel from tracking roster');
+              }}
+              onManualVesselUpdate={async (params) => {
+                await updateVesselManualUpdate(params);
+                notify(`Saved manual coordinator update for ${params.vessel.name}`);
+              }}
+              onAssignOrderToVessel={async (order, vessel) => {
+                await updateOrderLogistics({
+                  order,
+                  milestone:
+                    order.milestone === 'customer_approved' ||
+                    order.milestone === 'vehicle_purchased'
+                      ? 'shipment_booked'
+                      : order.milestone,
+                  vesselName: vessel.name,
+                  vesselId: vessel.id,
+                  vesselMmsi: vessel.mmsi,
+                  voyageNumber: vessel.voyageNumber || order.voyageNumber,
+                  blNumber: order.blNumber,
+                  etdDate: order.etdDate,
+                  etaDate: vessel.etaManual || vessel.etaReported || order.etaDate,
+                  scheduleIsEstimate: order.scheduleIsEstimate,
+                  actorRole: effectiveRole,
+                });
+                notify(`Assigned ${order.orderNumber} to vessel ${vessel.name} (MMSI ${vessel.mmsi})`);
+              }}
+              onRefreshAisStatus={refreshAisTracking}
+              onPersistLiveAisToFirestore={handlePersistLiveAisToFirestore}
               onNotify={notify}
               onExitConsole={() => setActiveView('home')}
               onSignOut={() => void handleSignOut()}
@@ -1368,9 +1755,16 @@ export default function App() {
                 notify(`Shortlisted option attached to ${req.requestCode}`);
               }}
               onCreateQuotation={async (input) => {
+                const lockedRate =
+                  effectiveSettings.exchangeRates[input.currency] ||
+                  (input.currency === 'USD' ? 1 : undefined);
+                const lockedRateDate = effectiveLiveFx.updatedAt || new Date().toISOString();
                 if (isLiveFirestoreMode) {
                   const qNum = await createQuotation({
                     ...input,
+                    lockedExchangeRate: lockedRate,
+                    lockedCurrency: input.currency,
+                    lockedRateDate,
                     preparedByStaffId: activeProfile?.uid || 'staff-sales-01',
                     preparedByName: activeProfile?.displayName || 'Kenji Takahashi',
                   });
@@ -1389,6 +1783,9 @@ export default function App() {
                       id: `qt-${Date.now()}`,
                       quoteNumber: qNum,
                       ...input,
+                      lockedExchangeRate: lockedRate,
+                      lockedCurrency: input.currency,
+                      lockedRateDate,
                       preparedByStaffId: activeProfile?.uid || 'staff-sales-01',
                       preparedByName: activeProfile?.displayName || 'Kenji Takahashi',
                       totalCifUsd,
@@ -1404,8 +1801,21 @@ export default function App() {
                 }
               }}
               onConvertQuoteToOrder={async (quotation) => {
+                const fallbackRate =
+                  effectiveSettings.exchangeRates[quotation.currency] ||
+                  (quotation.currency === 'USD' ? 1 : undefined);
+                const lockedRate = quotation.lockedExchangeRate || fallbackRate;
+                const lockedCurrency = quotation.lockedCurrency || quotation.currency;
+                const lockedRateDate =
+                  quotation.lockedRateDate || effectiveLiveFx.updatedAt || new Date().toISOString();
                 if (isLiveFirestoreMode) {
-                  const orderNumber = await convertQuotationToOrder(quotation);
+                  const orderNumber = await convertQuotationToOrder(
+                    quotation,
+                    'auction_listing',
+                    lockedRate
+                      ? { rate: lockedRate, currency: lockedCurrency, date: lockedRateDate }
+                      : undefined
+                  );
                   notify(`Converted ${quotation.quoteNumber} into Export Order ${orderNumber}`);
                 } else {
                   const orderNumber = `ORD-AUZ-2026-${Math.floor(300 + Math.random() * 699)}`;
@@ -1432,6 +1842,9 @@ export default function App() {
                       insuranceUsd: quotation.marineInsuranceUsd,
                       totalCifUsd: quotation.totalCifUsd,
                       currency: quotation.currency,
+                      lockedExchangeRate: lockedRate,
+                      lockedCurrency,
+                      lockedRateDate,
                       authorizedMaxBidUsd: quotation.authorizedMaxBidUsd,
                       placedBidUsd: 0,
                       milestone: 'customer_approved',

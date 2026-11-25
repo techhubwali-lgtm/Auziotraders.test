@@ -375,6 +375,9 @@ export interface Quotation {
   declineReason: string;
   validUntil: string;
   notes: string;
+  lockedExchangeRate?: number;
+  lockedCurrency?: CurrencyCode;
+  lockedRateDate?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -405,11 +408,16 @@ export interface ExportOrder {
   placedBidUsd: number;
   milestone: TradeOrderMilestone;
   vesselName: string;
+  vesselId?: string;
+  vesselMmsi?: string;
   voyageNumber: string;
   blNumber: string;
   etdDate: string;
   etaDate: string;
   scheduleIsEstimate: boolean;
+  lockedExchangeRate?: number;
+  lockedCurrency?: CurrencyCode;
+  lockedRateDate?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -506,9 +514,21 @@ export interface LiveExchangeRateState {
   loading: boolean;
   base: 'USD';
   rates: Record<string, number>;
+  rawRates?: Record<string, number>;
+  jpyRates?: Record<string, number>;
+  supportedCount?: number;
   updatedAt: string | null;
+  nextUpdateAt?: string | null;
+  jpyUpdatedAt?: string | null;
   provider: string;
+  attributionUrl?: string;
+  attributionText?: string;
+  source?: 'live_api' | 'firestore_cache' | 'unavailable';
+  stale?: boolean;
+  globalMarginPct?: number;
+  currencyMargins?: Record<string, number>;
   message?: string;
+  error?: string;
 }
 
 export interface CifBreakdown {
@@ -566,8 +586,13 @@ export interface OrderStatusRecord {
   currency: CurrencyCode;
   milestone: string;
   vesselName: string;
+  vesselId?: string;
+  vesselMmsi?: string;
   etaDate: string;
   publicNote: string;
+  lockedExchangeRate?: number;
+  lockedCurrency?: CurrencyCode;
+  lockedRateDate?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -691,6 +716,7 @@ export type AppView =
   | 'shipping'
   | 'how_to_buy'
   | 'track'
+  | 'vessel_tracking'
   | 'customer_portal'
   | 'staff_console';
 
@@ -701,6 +727,9 @@ export interface ProformaDraft {
   vehicle: Vehicle;
   cif: CifBreakdown;
   currency: CurrencyCode;
+  lockedExchangeRate?: number;
+  lockedRateDate?: string;
+  isRateLocked?: boolean;
   consigneeName: string;
   consigneeAddress: string;
   consigneePhone: string;
@@ -812,3 +841,135 @@ export interface SalesTarget {
   createdAt?: unknown;
   updatedAt?: unknown;
 }
+
+// =============================================================================
+// Real External API Integrations (ExchangeRate-API & AISStream Vessel Tracking)
+// =============================================================================
+
+export interface ExchangeRateCacheDoc {
+  base: 'USD';
+  rates: Record<string, number>;
+  jpyRates: Record<string, number>;
+  supportedCount: number;
+  globalMarginPct: number;
+  currencyMargins: Record<string, number>;
+  provider: string;
+  attributionUrl: string;
+  updatedAt: string;
+  nextUpdateAt: string;
+  jpyUpdatedAt: string;
+  lastSyncStatus: 'ok' | 'stale' | 'error';
+  lastError?: string;
+}
+
+export interface RegisteredVessel {
+  id: string;
+  name: string;
+  mmsi: string;
+  imo: string;
+  callSign: string;
+  carrier: string;
+  voyageNumber: string;
+  originPort: string;
+  destinationPort: string;
+  etaReported: string;
+  etaManual: string;
+  latitude: number | null;
+  longitude: number | null;
+  speedKnots: number | null;
+  courseDeg: number | null;
+  headingDeg: number | null;
+  navStatus: number | null;
+  aisDestination: string;
+  lastAisUpdateAt: string;
+  manualStatus: string;
+  manualLocationNote: string;
+  manualLatitude?: number | null;
+  manualLongitude?: number | null;
+  manualUpdatedAt: string;
+  trackingEnabled: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface ApiErrorLogEntry {
+  id: string;
+  provider: 'exchange_rate' | 'aisstream' | 'auction_feed';
+  level: 'error' | 'warning' | 'info';
+  message: string;
+  timestamp: string;
+}
+
+export interface ApiIntegrationConfig {
+  exchangeRateEnabled: boolean;
+  vesselTrackingEnabled: boolean;
+  commercialDisplayConfirmed: boolean;
+  lastFxSyncAt: string;
+  lastAisSyncAt: string;
+  errorLogs: ApiErrorLogEntry[];
+  updatedAt?: unknown;
+}
+
+export interface LiveVesselTelemetry {
+  mmsi: string;
+  vesselName: string;
+  imo: string;
+  callSign: string;
+  latitude: number | null;
+  longitude: number | null;
+  speedKnots: number | null;
+  courseDeg: number | null;
+  headingDeg: number | null;
+  navStatus: number | null;
+  navStatusText?: string;
+  vesselType?: string;
+  flag?: string;
+  lastPort?: string;
+  positionReceivedAgo?: string;
+  destination: string;
+  reportedEta: string;
+  lastAisUpdateAt: string;
+  messageType: 'PositionReport' | 'ShipStaticData';
+  dataSource?: 'aisstream' | 'global_ais';
+}
+
+export interface AisServiceStatusResponse {
+  configured: boolean;
+  enabled: boolean;
+  connected: boolean;
+  state:
+    | 'unconfigured'
+    | 'disabled'
+    | 'idle_no_vessels'
+    | 'connecting'
+    | 'connected'
+    | 'reconnecting'
+    | 'error';
+  endpoint: string;
+  subscribedMmsis: string[];
+  lastConnectedAt: string | null;
+  lastMessageAt: string | null;
+  lastSyncAt: string | null;
+  reconnectAttempts: number;
+  trackedVesselCount: number;
+  positions: Record<string, LiveVesselTelemetry>;
+  errorLogs: Array<{
+    timestamp: string;
+    level: 'error' | 'warning' | 'info';
+    message: string;
+  }>;
+}
+
+export interface AisTestConnectionResponse {
+  ok: boolean;
+  configured: boolean;
+  testedAt: string;
+  latencyMs: number;
+  handshakeOk: boolean;
+  subscriptionSent: boolean;
+  sampleReceived: boolean;
+  testedMmsis: string[];
+  message: string;
+  error?: string;
+}
+

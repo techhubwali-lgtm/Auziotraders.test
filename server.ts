@@ -10,7 +10,12 @@ import {
   getAuctionStatus,
   searchLiveAuctions,
 } from './server/auctionProxy.ts';
-import { getLiveExchangeRates } from './server/exchangeRates.ts';
+import {
+  getLiveExchangeRates,
+  testExchangeRateConnection,
+} from './server/exchangeRates.ts';
+import { aisStreamManager } from './server/aisStreamService.ts';
+import { lookupVesselByQuery } from './server/vesselLookupService.ts';
 import { runAdminAiAssistant, type AdminAiTaskType } from './server/aiAssistant.ts';
 import type { AuctionFeedTable, SteeringType } from './src/types/portal.ts';
 
@@ -157,13 +162,140 @@ async function startServer() {
   });
 
   // ---------------------------------------------------------------------------
-  // Live Global Exchange Rates (ISO 4217, cached 60m, zero fake fallback rates)
+  // Live Global Exchange Rates (ExchangeRate-API USD + JPY, cached 24h)
   // ---------------------------------------------------------------------------
   app.get('/api/exchange-rates', async (req, res) => {
     const force = req.query.refresh === '1';
     const data = await getLiveExchangeRates(force);
-    res.setHeader('Cache-Control', data.ok ? 'public, max-age=900' : 'no-store');
+    res.setHeader('Cache-Control', data.ok && !force ? 'public, max-age=900' : 'no-store');
     res.status(data.ok ? 200 : 503).json(data);
+  });
+
+  app.post('/api/exchange-rates/test', async (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    if (!authHeader.startsWith('Bearer ') || authHeader.slice(7).trim().length < 20) {
+      res.status(401).json({
+        ok: false,
+        error: 'Authentication required to test ExchangeRate-API.',
+      });
+      return;
+    }
+    const result = await testExchangeRateConnection();
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(result.ok ? 200 : 502).json(result);
+  });
+
+  // ---------------------------------------------------------------------------
+  // AISStream Live Vessel Tracking Routes (Server-Side WebSocket Proxy)
+  // ---------------------------------------------------------------------------
+  app.get('/api/ais/status', (_req, res) => {
+    const status = aisStreamManager.getStatus();
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(status);
+  });
+
+  app.get('/api/ais/positions', (_req, res) => {
+    const positions = aisStreamManager.getPositions();
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({
+      ok: true,
+      updatedAt: new Date().toISOString(),
+      positions,
+    });
+  });
+
+  app.post('/api/ais/sync-filters', (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    if (!authHeader.startsWith('Bearer ') || authHeader.slice(7).trim().length < 20) {
+      res.status(401).json({
+        ok: false,
+        error: 'Authentication required to update AISStream vessel filters.',
+      });
+      return;
+    }
+    const body = (req.body || {}) as { enabled?: boolean; mmsis?: string[] };
+    const status = aisStreamManager.syncFilters({
+      enabled: body.enabled !== false,
+      mmsis: Array.isArray(body.mmsis) ? body.mmsis : [],
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(status);
+  });
+
+  app.post('/api/ais/test', async (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    if (!authHeader.startsWith('Bearer ') || authHeader.slice(7).trim().length < 20) {
+      res.status(401).json({
+        ok: false,
+        error: 'Authentication required to test AISStream connection.',
+      });
+      return;
+    }
+    const body = (req.body || {}) as { mmsis?: string[] };
+    const result = await aisStreamManager.testConnection(
+      Array.isArray(body.mmsis) ? body.mmsis : undefined
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(result);
+  });
+
+  app.post('/api/ais/bootstrap-fleet', (req, res) => {
+    const body = (req.body || {}) as { mmsis?: string[] };
+    const status = aisStreamManager.bootstrapFleetMmsis(
+      Array.isArray(body.mmsis) ? body.mmsis : []
+    );
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(status);
+  });
+
+  app.post('/api/ais/track-mmsi', async (req, res) => {
+    const body = (req.body || {}) as { mmsi?: string };
+    const mmsi = String(body.mmsi || '').replace(/\D/g, '').trim();
+    const streamResult = await aisStreamManager.trackOnDemandMmsi(mmsi, 2500);
+    if (streamResult.position && streamResult.position.latitude !== null) {
+      res.setHeader('Cache-Control', 'no-store');
+      res.status(200).json(streamResult);
+      return;
+    }
+
+    // Fallback to live global AIS maritime resolver if AISStream has not emitted a packet yet
+    if (/^\d{9}$/.test(mmsi)) {
+      const lookup = await lookupVesselByQuery(mmsi);
+      if (lookup.ok && lookup.vessel) {
+        res.setHeader('Cache-Control', 'no-store');
+        res.status(200).json({
+          ...streamResult,
+          ok: true,
+          position: lookup.vessel,
+          message: lookup.message,
+        });
+        return;
+      }
+    }
+
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(streamResult.ok ? 200 : 400).json(streamResult);
+  });
+
+  app.post('/api/ais/lookup-vessel', async (req, res) => {
+    const body = (req.body || {}) as { query?: string; bypassCache?: boolean };
+    const query = typeof body.query === 'string' ? body.query.trim().slice(0, 80) : '';
+    const result = await lookupVesselByQuery(query, {
+      bypassCache: Boolean(body.bypassCache),
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(result.ok ? 200 : result.query.length < 2 ? 400 : 404).json(result);
+  });
+
+  app.post('/api/ais/clear-logs', (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    if (!authHeader.startsWith('Bearer ') || authHeader.slice(7).trim().length < 20) {
+      res.status(401).json({ ok: false, error: 'Authentication required.' });
+      return;
+    }
+    aisStreamManager.clearLogs();
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json({ ok: true });
   });
 
   // ---------------------------------------------------------------------------

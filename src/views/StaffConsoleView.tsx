@@ -26,6 +26,7 @@ import {
   Moon,
   Package,
   Plus,
+  Radio,
   Search,
   Send,
   Settings,
@@ -45,6 +46,7 @@ import { StaffAuctionImportPanel } from '../components/StaffAuctionImportPanel';
 import { AccountsFinancePanel } from '../components/admin/AccountsFinancePanel';
 import { AdminSettingsPanel } from '../components/admin/AdminSettingsPanel';
 import { AiAutomationPanel } from '../components/admin/AiAutomationPanel';
+import { ApiIntegrationsPanel } from '../components/admin/ApiIntegrationsPanel';
 import { CrmSalesPanel } from '../components/admin/CrmSalesPanel';
 import { ExecutiveDashboardPanel } from '../components/admin/ExecutiveDashboardPanel';
 import { HrManagementPanel } from '../components/admin/HrManagementPanel';
@@ -66,11 +68,14 @@ import {
 import type {
   AccountStatus,
   AdminModuleKey,
+  AisServiceStatusResponse,
+  ApiIntegrationConfig,
   AuditLogEntry,
   CompanySettings,
   CurrencyCode,
   CustomerTestimonial,
   DesignationLevel,
+  ExchangeRateCacheDoc,
   ExportDocType,
   ExportDocument,
   ExportOrder,
@@ -85,6 +90,7 @@ import type {
   OrderMilestone,
   PersistedUserRole,
   Quotation,
+  RegisteredVessel,
   RolePermissionsMap,
   SalesTarget,
   SourcingOption,
@@ -114,6 +120,7 @@ type ConsoleSection =
   | 'cms'
   | 'ai'
   | 'users'
+  | 'integrations'
   | 'settings';
 
 const THEME_STORAGE_KEY = 'auzio_admin_theme';
@@ -124,6 +131,10 @@ interface StaffConsoleViewProps {
   currency: CurrencyCode;
   settings: CompanySettings;
   liveFx: LiveExchangeRateState;
+  fxCache: ExchangeRateCacheDoc | null;
+  integrationConfig: ApiIntegrationConfig;
+  vessels: RegisteredVessel[];
+  aisStatus: AisServiceStatusResponse | null;
   isLiveFirestoreMode: boolean;
   vehicles: Vehicle[];
   users: UserProfile[];
@@ -143,7 +154,28 @@ interface StaffConsoleViewProps {
   staffInvitations: StaffInvitation[];
   landingContent: LandingPageContent;
   testimonials: CustomerTestimonial[];
-  onRefreshFx: () => void;
+  onRefreshFx: () => Promise<void>;
+  onSaveFxMargins: (
+    globalMarginPct: number,
+    currencyMargins: Record<string, number>
+  ) => Promise<void>;
+  onSaveIntegrationConfig: (next: ApiIntegrationConfig) => Promise<void>;
+  onSaveVessel: (
+    input: Omit<RegisteredVessel, 'id' | 'createdAt' | 'updatedAt'>,
+    existingId?: string
+  ) => Promise<void>;
+  onDeleteVessel: (vesselId: string) => Promise<void>;
+  onManualVesselUpdate: (params: {
+    vessel: RegisteredVessel;
+    manualStatus: string;
+    manualLocationNote: string;
+    etaManual: string;
+    manualLatitude?: number | null;
+    manualLongitude?: number | null;
+  }) => Promise<void>;
+  onAssignOrderToVessel: (order: ExportOrder, vessel: RegisteredVessel) => Promise<void>;
+  onRefreshAisStatus: () => Promise<void>;
+  onPersistLiveAisToFirestore: () => Promise<number>;
   onUpdateInquiry: (
     inquiryId: string,
     updates: { status: OrderMilestone; adminNotes: string }
@@ -273,6 +305,10 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
     currency,
     settings,
     liveFx,
+    fxCache,
+    integrationConfig,
+    vessels,
+    aisStatus,
     vehicles,
     users,
     sourcingRequests,
@@ -292,6 +328,14 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
     landingContent,
     testimonials,
     onRefreshFx,
+    onSaveFxMargins,
+    onSaveIntegrationConfig,
+    onSaveVessel,
+    onDeleteVessel,
+    onManualVesselUpdate,
+    onAssignOrderToVessel,
+    onRefreshAisStatus,
+    onPersistLiveAisToFirestore,
     onUpdateInquiry,
     onAttachSourcingOption,
     onCreateQuotation,
@@ -535,9 +579,22 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
       { id: 'cms', label: 'Website CMS', icon: Globe, moduleKey: 'cms' },
       { id: 'ai', label: 'AI Assistant', icon: Bot, moduleKey: 'ai' },
       { id: 'users', label: 'Users & Roles', icon: Shield, moduleKey: 'users' },
+      { id: 'integrations', label: 'API Integrations', icon: Radio, moduleKey: 'settings' },
       { id: 'settings', label: 'Settings', icon: Settings, moduleKey: 'settings' },
     ];
-    return all.filter((item) => can(item.moduleKey, 'view'));
+    return all.filter((item) => {
+      if (item.id === 'integrations') {
+        return (
+          can('settings', 'view') ||
+          can('logistics', 'edit') ||
+          role === 'accounts' ||
+          role === 'it' ||
+          role === 'management' ||
+          role === 'admin'
+        );
+      }
+      return can(item.moduleKey, 'view');
+    });
   }, [role, staffProfile, inquiries, sourcingRequests, hrLeaveRequests]);
 
   // Universal Search Results across all modules
@@ -2387,7 +2444,43 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
             />
           )}
 
-          {/* 15. SETTINGS, AUTOMATIC FX, PROTECTED BANKING & AUDIT */}
+          {/* 15. API INTEGRATIONS (EXCHANGE RATE API & AISSTREAM VESSEL TRACKING) */}
+          {activeSection === 'integrations' && (
+            <ApiIntegrationsPanel
+              role={role}
+              canEditSettings={
+                can('settings', 'edit') ||
+                role === 'accounts' ||
+                role === 'it' ||
+                role === 'management' ||
+                role === 'admin'
+              }
+              canEditLogistics={
+                can('logistics', 'edit') ||
+                role === 'operations' ||
+                role === 'management' ||
+                role === 'admin'
+              }
+              liveFx={liveFx}
+              fxCache={fxCache}
+              integrationConfig={integrationConfig}
+              vessels={vessels}
+              aisStatus={aisStatus}
+              orders={orders}
+              onRefreshFx={onRefreshFx}
+              onSaveFxMargins={onSaveFxMargins}
+              onSaveIntegrationConfig={onSaveIntegrationConfig}
+              onSaveVessel={onSaveVessel}
+              onDeleteVessel={onDeleteVessel}
+              onManualVesselUpdate={onManualVesselUpdate}
+              onAssignOrderToVessel={onAssignOrderToVessel}
+              onRefreshAisStatus={onRefreshAisStatus}
+              onPersistLiveAisToFirestore={onPersistLiveAisToFirestore}
+              onNotify={onNotify}
+            />
+          )}
+
+          {/* 16. SETTINGS, AUTOMATIC FX, PROTECTED BANKING & AUDIT */}
           {activeSection === 'settings' && (
             <AdminSettingsPanel
               role={role}
@@ -2398,7 +2491,7 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
               canViewBanking={can('banking', 'view')}
               canEditBanking={can('banking', 'edit')}
               canExport={can('settings', 'export')}
-              onRefreshFx={onRefreshFx}
+              onRefreshFx={() => void onRefreshFx()}
               onSaveCompanyProfile={onSaveSettings}
               onSaveBankingDetails={onSaveBankingDetails}
               onDownloadFullBackup={handleDownloadFullBackup}

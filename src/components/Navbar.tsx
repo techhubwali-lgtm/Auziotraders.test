@@ -10,7 +10,7 @@ import {
   X,
 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { WORLD_CURRENCIES } from '../data/currencies';
+import { buildDynamicCurrencyList } from '../data/currencies';
 import { OFFICIAL_LOGO_URL } from '../data/landingDefaults';
 import { isStaffRole } from '../data/permissions';
 import { WORLD_COUNTRIES, getWorldCountryByCode } from '../data/worldCountriesPorts';
@@ -89,12 +89,13 @@ export function Navbar({
   );
 
   const currencyOptions = useMemo<SearchableOption[]>(() => {
-    return WORLD_CURRENCIES.map((c) => {
+    const dynamicCurrencies = buildDynamicCurrencyList(liveFx.rates);
+    return dynamicCurrencies.map((c) => {
       const rate = liveFx.rates[c.code];
       const hasRate = c.code === 'USD' || (typeof rate === 'number' && rate > 0);
       return {
         value: c.code,
-        label: `${c.code} (${c.symbol})`,
+        label: `${c.flag} ${c.code} (${c.symbol})`,
         sublabel: hasRate
           ? `${c.name}${c.code !== 'USD' && rate ? ` · 1 USD = ${rate.toFixed(rate >= 100 ? 1 : 2)} ${c.code}` : ''}`
           : `${c.name} · Live FX unavailable (shows USD)`,
@@ -132,15 +133,9 @@ export function Navbar({
   const dashboardView: AppView = isStaffUser ? 'staff_console' : 'customer_portal';
 
   const fxFooterNote = liveFx.ok
-    ? `Live FX updated: ${formatFxTimestamp(liveFx.updatedAt)} · Official invoices billed in USD.`
-    : liveFx.message || 'Live FX feed unavailable. Prices shown in verified USD.';
+    ? `Updated: ${formatFxTimestamp(liveFx.updatedAt)} · Rates By Exchange Rate API (exchangerate-api.com)${liveFx.stale ? ' · Saved cache' : ''}`
+    : liveFx.error || liveFx.message || 'Live FX unavailable — showing saved USD prices.';
 
-  // Streamlined 5-item navigation combining:
-  // 1. Home (Home + Browse Stock + Live Auctions unified)
-  // 2. Services & How to Buy (Our Services + How to Buy + About Us unified)
-  // 3. Testimonials
-  // 4. Track Order
-  // 5. Contact Us
   const navLinks: Array<{
     id: string;
     label: string;
@@ -160,10 +155,10 @@ export function Navbar({
       onClick: () => onNavigateView('how_to_buy'),
     },
     {
-      id: 'testimonials',
-      label: 'Testimonials',
-      active: false,
-      onClick: () => onNavigateView('home', { anchor: 'testimonials' }),
+      id: 'vessel-tracking',
+      label: 'Vessel Tracking',
+      active: activeView === 'vessel_tracking',
+      onClick: () => onNavigateView('vessel_tracking'),
     },
     {
       id: 'track',

@@ -28,10 +28,13 @@ import {
 import { DEFAULT_LANDING_CONTENT } from '../data/landingDefaults';
 import { auth, db, handleFirestoreError, OperationType } from '../lib/firebase';
 import type {
+  ApiErrorLogEntry,
+  ApiIntegrationConfig,
   AuditLogEntry,
   CompanySettings,
   CurrencyCode,
   CustomerTestimonial,
+  ExchangeRateCacheDoc,
   ExportDocType,
   ExportDocument,
   ExportOrder,
@@ -41,11 +44,13 @@ import type {
   Inquiry,
   LandingPageContent,
   ListingType,
+  LiveVesselTelemetry,
   OrderMessage,
   OrderMilestone,
   OrderStatusRecord,
   PersistedUserRole,
   Quotation,
+  RegisteredVessel,
   RolePermissionsMap,
   SalesTarget,
   ShippingMethod,
@@ -714,6 +719,9 @@ export async function createQuotation(input: {
   marineInsuranceUsd: number;
   authorizedMaxBidUsd: number;
   notes: string;
+  lockedExchangeRate?: number;
+  lockedCurrency?: CurrencyCode;
+  lockedRateDate?: string;
 }): Promise<string> {
   const id = generateDocumentId('qt');
   const quoteNumber = `QT-AUZ-2026-${Math.floor(600 + Math.random() * 399)}`;
@@ -757,6 +765,13 @@ export async function createQuotation(input: {
       declineReason: '',
       validUntil,
       notes: input.notes.trim().slice(0, 800),
+      ...(typeof input.lockedExchangeRate === 'number' && input.lockedExchangeRate > 0
+        ? {
+            lockedExchangeRate: Number(input.lockedExchangeRate.toFixed(6)),
+            lockedCurrency: input.lockedCurrency || input.currency,
+            lockedRateDate: input.lockedRateDate || new Date().toISOString(),
+          }
+        : {}),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -810,12 +825,20 @@ export async function respondToQuotation(params: {
 
 export async function convertQuotationToOrder(
   quotation: Quotation,
-  listingType: ListingType = 'auction_listing'
+  listingType: ListingType = 'auction_listing',
+  lockedRateSnapshot?: { rate: number; currency: CurrencyCode; date?: string }
 ): Promise<string> {
   const id = generateDocumentId('ord');
   const orderNumber = `ORD-AUZ-2026-${Math.floor(710 + Math.random() * 289)}`;
   const trackingCode = generateTrackingCode();
   const path = `orders/${id}`;
+
+  const lockedRate =
+    quotation.lockedExchangeRate || lockedRateSnapshot?.rate || undefined;
+  const lockedCurr =
+    quotation.lockedCurrency || lockedRateSnapshot?.currency || quotation.currency;
+  const lockedDate =
+    quotation.lockedRateDate || lockedRateSnapshot?.date || new Date().toISOString();
 
   try {
     const batch = writeBatch(db);
@@ -844,11 +867,20 @@ export async function convertQuotationToOrder(
       placedBidUsd: 0,
       milestone: 'customer_approved' as TradeOrderMilestone,
       vesselName: '',
+      vesselId: '',
+      vesselMmsi: '',
       voyageNumber: '',
       blNumber: '',
       etdDate: '',
       etaDate: '',
       scheduleIsEstimate: true,
+      ...(typeof lockedRate === 'number' && lockedRate > 0
+        ? {
+            lockedExchangeRate: Number(lockedRate.toFixed(6)),
+            lockedCurrency: lockedCurr,
+            lockedRateDate: lockedDate,
+          }
+        : {}),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -864,8 +896,17 @@ export async function convertQuotationToOrder(
       currency: quotation.currency,
       milestone: 'customer_approved',
       vesselName: '',
+      vesselId: '',
+      vesselMmsi: '',
       etaDate: '',
       publicNote: `Order ${orderNumber} opened following customer quotation approval.`,
+      ...(typeof lockedRate === 'number' && lockedRate > 0
+        ? {
+            lockedExchangeRate: Number(lockedRate.toFixed(6)),
+            lockedCurrency: lockedCurr,
+            lockedRateDate: lockedDate,
+          }
+        : {}),
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -927,6 +968,8 @@ export async function updateOrderLogistics(params: {
   order: ExportOrder;
   milestone: TradeOrderMilestone;
   vesselName: string;
+  vesselId?: string;
+  vesselMmsi?: string;
   voyageNumber: string;
   blNumber: string;
   etdDate: string;
@@ -935,11 +978,15 @@ export async function updateOrderLogistics(params: {
   actorRole: UserRole;
 }): Promise<void> {
   const path = `orders/${params.order.id}`;
+  const cleanVesselId = (params.vesselId ?? params.order.vesselId ?? '').trim().slice(0, 128);
+  const cleanVesselMmsi = (params.vesselMmsi ?? params.order.vesselMmsi ?? '').trim().slice(0, 12);
   try {
     const batch = writeBatch(db);
     batch.update(doc(db, 'orders', params.order.id), {
       milestone: params.milestone,
       vesselName: params.vesselName.trim().slice(0, 100),
+      vesselId: cleanVesselId,
+      vesselMmsi: cleanVesselMmsi,
       voyageNumber: params.voyageNumber.trim().slice(0, 40),
       blNumber: params.blNumber.trim().slice(0, 60),
       etdDate: params.etdDate.trim().slice(0, 32),
@@ -961,8 +1008,17 @@ export async function updateOrderLogistics(params: {
         currency: params.order.currency,
         milestone: params.milestone,
         vesselName: params.vesselName.trim().slice(0, 100),
+        vesselId: cleanVesselId,
+        vesselMmsi: cleanVesselMmsi,
         etaDate: params.etaDate.trim().slice(0, 32),
         publicNote: `Stage updated to ${params.milestone.replace(/_/g, ' ')}${params.vesselName ? ` · Vessel: ${params.vesselName}` : ''}.`,
+        ...(params.order.lockedExchangeRate
+          ? {
+              lockedExchangeRate: params.order.lockedExchangeRate,
+              lockedCurrency: params.order.lockedCurrency || params.order.currency,
+              lockedRateDate: params.order.lockedRateDate || '',
+            }
+          : {}),
         createdAt: params.order.createdAt || serverTimestamp(),
         updatedAt: serverTimestamp(),
       },
@@ -975,7 +1031,7 @@ export async function updateOrderLogistics(params: {
       action: 'milestone_updated',
       targetType: 'order',
       targetId: params.order.id,
-      summary: `Updated ${params.order.orderNumber} to ${params.milestone} (${params.vesselName || 'No vessel yet'}).`,
+      summary: `Updated ${params.order.orderNumber} to ${params.milestone} (${params.vesselName || 'No vessel yet'}${cleanVesselMmsi ? ` · MMSI ${cleanVesselMmsi}` : ''}).`,
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
@@ -2267,6 +2323,345 @@ export async function claimPendingStaffInvitation(params: {
     return null;
   }
 }
+
+// ============================================================================
+// 16. Exchange Rate 24h Firestore Cache & Margin Management
+// ============================================================================
+
+export function subscribeExchangeRateCache(
+  onData: (cache: ExchangeRateCacheDoc | null) => void
+): Unsubscribe {
+  const ref = doc(db, 'exchangeRates', 'latest');
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (snap.exists()) {
+        onData(snap.data() as ExchangeRateCacheDoc);
+      } else {
+        onData(null);
+      }
+    },
+    () => {
+      onData(null);
+    }
+  );
+}
+
+export async function saveExchangeRateCache(cache: ExchangeRateCacheDoc): Promise<void> {
+  const path = 'exchangeRates/latest';
+  try {
+    const cleanedMargins: Record<string, number> = {};
+    for (const [k, v] of Object.entries(cache.currencyMargins || {})) {
+      const code = k.trim().toUpperCase();
+      if (/^[A-Z]{3}$/.test(code) && typeof v === 'number' && Number.isFinite(v)) {
+        cleanedMargins[code] = Math.max(-20, Math.min(25, Number(v.toFixed(2))));
+      }
+    }
+
+    await setDoc(doc(db, 'exchangeRates', 'latest'), {
+      base: 'USD',
+      rates: cache.rates,
+      jpyRates: cache.jpyRates || { JPY: 1 },
+      supportedCount: Object.keys(cache.rates || {}).length,
+      globalMarginPct: Math.max(-20, Math.min(25, Number((cache.globalMarginPct || 0).toFixed(2)))),
+      currencyMargins: cleanedMargins,
+      provider: (cache.provider || 'ExchangeRate-API (open.er-api.com)').slice(0, 120),
+      attributionUrl: (cache.attributionUrl || 'https://www.exchangerate-api.com').slice(0, 200),
+      updatedAt: (cache.updatedAt || new Date().toISOString()).slice(0, 64),
+      nextUpdateAt: (cache.nextUpdateAt || '').slice(0, 64),
+      jpyUpdatedAt: (cache.jpyUpdatedAt || '').slice(0, 64),
+      lastSyncStatus: cache.lastSyncStatus || 'ok',
+      lastError: (cache.lastError || '').slice(0, 400),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+// ============================================================================
+// 17. Registered Export Vessels & AISStream / Manual Position Persistence
+// ============================================================================
+
+export function subscribeVessels(
+  onData: (vessels: RegisteredVessel[]) => void
+): Unsubscribe {
+  return onSnapshot(
+    collection(db, 'vessels'),
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({
+          id: d.id,
+          ...(d.data() as Omit<RegisteredVessel, 'id'>),
+        }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+      onData(list);
+    },
+    () => {
+      onData([]);
+    }
+  );
+}
+
+export async function saveVessel(
+  input: Omit<RegisteredVessel, 'id' | 'createdAt' | 'updatedAt'>,
+  existingId?: string
+): Promise<string> {
+  const id = existingId || generateDocumentId('vsl');
+  const path = `vessels/${id}`;
+  const cleanMmsi = input.mmsi.replace(/\D/g, '').slice(0, 9);
+  if (!/^\d{9}$/.test(cleanMmsi)) {
+    throw new Error('Vessel MMSI must be exactly 9 numeric digits.');
+  }
+
+  const payload = {
+    name: input.name.trim().slice(0, 100),
+    mmsi: cleanMmsi,
+    imo: input.imo.replace(/\D/g, '').slice(0, 20),
+    callSign: input.callSign.trim().toUpperCase().slice(0, 24),
+    carrier: input.carrier.trim().slice(0, 80),
+    voyageNumber: input.voyageNumber.trim().slice(0, 40),
+    originPort: input.originPort.trim().slice(0, 80),
+    destinationPort: input.destinationPort.trim().slice(0, 100),
+    etaReported: (input.etaReported || '').trim().slice(0, 60),
+    etaManual: (input.etaManual || '').trim().slice(0, 40),
+    latitude:
+      typeof input.latitude === 'number' && Number.isFinite(input.latitude)
+        ? Number(input.latitude.toFixed(5))
+        : null,
+    longitude:
+      typeof input.longitude === 'number' && Number.isFinite(input.longitude)
+        ? Number(input.longitude.toFixed(5))
+        : null,
+    speedKnots:
+      typeof input.speedKnots === 'number' && Number.isFinite(input.speedKnots)
+        ? Number(input.speedKnots.toFixed(1))
+        : null,
+    courseDeg:
+      typeof input.courseDeg === 'number' && Number.isFinite(input.courseDeg)
+        ? Number(input.courseDeg.toFixed(1))
+        : null,
+    headingDeg:
+      typeof input.headingDeg === 'number' && Number.isFinite(input.headingDeg)
+        ? Math.round(input.headingDeg)
+        : null,
+    navStatus: typeof input.navStatus === 'number' ? input.navStatus : null,
+    aisDestination: (input.aisDestination || '').trim().slice(0, 100),
+    lastAisUpdateAt: (input.lastAisUpdateAt || '').trim().slice(0, 40),
+    manualStatus: (input.manualStatus || '').trim().slice(0, 80),
+    manualLocationNote: (input.manualLocationNote || '').trim().slice(0, 500),
+    manualLatitude:
+      typeof input.manualLatitude === 'number' && Number.isFinite(input.manualLatitude)
+        ? Number(input.manualLatitude.toFixed(5))
+        : null,
+    manualLongitude:
+      typeof input.manualLongitude === 'number' && Number.isFinite(input.manualLongitude)
+        ? Number(input.manualLongitude.toFixed(5))
+        : null,
+    manualUpdatedAt: (input.manualUpdatedAt || '').trim().slice(0, 40),
+    trackingEnabled: Boolean(input.trackingEnabled),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    if (existingId) {
+      await setDoc(doc(db, 'vessels', id), payload, { merge: true });
+    } else {
+      await setDoc(doc(db, 'vessels', id), {
+        ...payload,
+        createdAt: serverTimestamp(),
+      });
+    }
+    void recordAuditLog({
+      actorRole: 'operations',
+      action: existingId ? 'vessel_updated' : 'vessel_registered',
+      targetType: 'vessel',
+      targetId: id,
+      summary: `${existingId ? 'Updated' : 'Registered'} vessel ${payload.name} (MMSI: ${payload.mmsi}${payload.imo ? `, IMO: ${payload.imo}` : ''}).`,
+    });
+    return id;
+  } catch (error) {
+    handleFirestoreError(error, existingId ? OperationType.UPDATE : OperationType.CREATE, path);
+  }
+}
+
+export async function updateVesselAisTelemetry(
+  vessel: RegisteredVessel,
+  telemetry: LiveVesselTelemetry
+): Promise<void> {
+  const path = `vessels/${vessel.id}`;
+  try {
+    await setDoc(
+      doc(db, 'vessels', vessel.id),
+      {
+        name: vessel.name || telemetry.vesselName || `MMSI ${vessel.mmsi}`,
+        mmsi: vessel.mmsi,
+        imo: telemetry.imo || vessel.imo || '',
+        callSign: telemetry.callSign || vessel.callSign || '',
+        carrier: vessel.carrier || '',
+        voyageNumber: vessel.voyageNumber || '',
+        originPort: vessel.originPort || '',
+        destinationPort: vessel.destinationPort || '',
+        etaReported: telemetry.reportedEta || vessel.etaReported || '',
+        etaManual: vessel.etaManual || '',
+        latitude: telemetry.latitude ?? vessel.latitude ?? null,
+        longitude: telemetry.longitude ?? vessel.longitude ?? null,
+        speedKnots: telemetry.speedKnots ?? vessel.speedKnots ?? null,
+        courseDeg: telemetry.courseDeg ?? vessel.courseDeg ?? null,
+        headingDeg: telemetry.headingDeg ?? vessel.headingDeg ?? null,
+        navStatus: telemetry.navStatus ?? vessel.navStatus ?? null,
+        aisDestination: telemetry.destination || vessel.aisDestination || '',
+        lastAisUpdateAt: telemetry.lastAisUpdateAt || new Date().toISOString(),
+        manualStatus: vessel.manualStatus || '',
+        manualLocationNote: vessel.manualLocationNote || '',
+        manualUpdatedAt: vessel.manualUpdatedAt || '',
+        trackingEnabled: vessel.trackingEnabled,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateVesselManualUpdate(params: {
+  vessel: RegisteredVessel;
+  manualStatus: string;
+  manualLocationNote: string;
+  etaManual: string;
+  manualLatitude?: number | null;
+  manualLongitude?: number | null;
+}): Promise<void> {
+  const path = `vessels/${params.vessel.id}`;
+  const nowIso = new Date().toISOString();
+  try {
+    await setDoc(
+      doc(db, 'vessels', params.vessel.id),
+      {
+        name: params.vessel.name,
+        mmsi: params.vessel.mmsi,
+        imo: params.vessel.imo || '',
+        callSign: params.vessel.callSign || '',
+        carrier: params.vessel.carrier || '',
+        voyageNumber: params.vessel.voyageNumber || '',
+        originPort: params.vessel.originPort || '',
+        destinationPort: params.vessel.destinationPort || '',
+        etaManual: params.etaManual.trim().slice(0, 40),
+        manualStatus: params.manualStatus.trim().slice(0, 80),
+        manualLocationNote: params.manualLocationNote.trim().slice(0, 500),
+        manualLatitude:
+          typeof params.manualLatitude === 'number' && Number.isFinite(params.manualLatitude)
+            ? Number(params.manualLatitude.toFixed(5))
+            : params.vessel.manualLatitude ?? null,
+        manualLongitude:
+          typeof params.manualLongitude === 'number' && Number.isFinite(params.manualLongitude)
+            ? Number(params.manualLongitude.toFixed(5))
+            : params.vessel.manualLongitude ?? null,
+        manualUpdatedAt: nowIso,
+        latitude: params.vessel.latitude ?? null,
+        longitude: params.vessel.longitude ?? null,
+        trackingEnabled: params.vessel.trackingEnabled,
+        updatedAt: serverTimestamp(),
+      },
+      { merge: true }
+    );
+    void recordAuditLog({
+      actorRole: 'operations',
+      action: 'vessel_manual_update',
+      targetType: 'vessel',
+      targetId: params.vessel.id,
+      summary: `Manual position/status update for ${params.vessel.name} (MMSI ${params.vessel.mmsi}): ${params.manualStatus || params.manualLocationNote.slice(0, 80)}.`,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, path);
+  }
+}
+
+export async function deleteVessel(vesselId: string): Promise<void> {
+  const path = `vessels/${vesselId}`;
+  try {
+    await deleteDoc(doc(db, 'vessels', vesselId));
+    void recordAuditLog({
+      actorRole: 'operations',
+      action: 'vessel_deleted',
+      targetType: 'vessel',
+      targetId: vesselId,
+      summary: `Removed registered vessel ${vesselId} from tracking roster.`,
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, path);
+  }
+}
+
+// ============================================================================
+// 18. API Integrations Configuration & Error Logs (Staff Only; No API Secrets)
+// ============================================================================
+
+export const DEFAULT_API_INTEGRATION_CONFIG: ApiIntegrationConfig = {
+  exchangeRateEnabled: true,
+  vesselTrackingEnabled: true,
+  commercialDisplayConfirmed: false,
+  lastFxSyncAt: '',
+  lastAisSyncAt: '',
+  errorLogs: [],
+};
+
+export function subscribeApiIntegrationConfig(
+  isStaffUser: boolean,
+  onData: (config: ApiIntegrationConfig) => void
+): Unsubscribe {
+  if (!isStaffUser) {
+    onData(DEFAULT_API_INTEGRATION_CONFIG);
+    return () => {};
+  }
+  const ref = doc(db, 'apiIntegrations', 'config');
+  return onSnapshot(
+    ref,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data() as Partial<ApiIntegrationConfig>;
+        onData({
+          ...DEFAULT_API_INTEGRATION_CONFIG,
+          ...data,
+          errorLogs: Array.isArray(data.errorLogs) ? data.errorLogs : [],
+        });
+      } else {
+        onData(DEFAULT_API_INTEGRATION_CONFIG);
+      }
+    },
+    () => {
+      onData(DEFAULT_API_INTEGRATION_CONFIG);
+    }
+  );
+}
+
+export async function saveApiIntegrationConfig(config: ApiIntegrationConfig): Promise<void> {
+  const path = 'apiIntegrations/config';
+  try {
+    const safeLogs: ApiErrorLogEntry[] = (config.errorLogs || [])
+      .slice(0, 80)
+      .map((entry) => ({
+        id: String(entry.id || generateDocumentId('err')).slice(0, 64),
+        provider: entry.provider,
+        level: entry.level,
+        message: String(entry.message || '').slice(0, 400),
+        timestamp: String(entry.timestamp || new Date().toISOString()).slice(0, 40),
+      }));
+
+    await setDoc(doc(db, 'apiIntegrations', 'config'), {
+      exchangeRateEnabled: Boolean(config.exchangeRateEnabled),
+      vesselTrackingEnabled: Boolean(config.vesselTrackingEnabled),
+      commercialDisplayConfirmed: Boolean(config.commercialDisplayConfirmed),
+      lastFxSyncAt: (config.lastFxSyncAt || '').slice(0, 64),
+      lastAisSyncAt: (config.lastAisSyncAt || '').slice(0, 64),
+      errorLogs: safeLogs,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
 
 
 

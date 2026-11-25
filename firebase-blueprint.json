@@ -511,6 +511,69 @@
         "notes": { "type": "string", "maxLength": 400 }
       },
       "required": ["staffName", "period", "targetRevenueUsd", "targetUnits", "commissionRatePct"]
+    },
+    "ExchangeRateCache": {
+      "title": "ExchangeRateCache",
+      "description": "24-hour cached ExchangeRate-API USD and JPY exchange rates plus admin currency margin adjustments.",
+      "type": "object",
+      "properties": {
+        "base": { "type": "string", "enum": ["USD"] },
+        "rates": { "type": "object" },
+        "jpyRates": { "type": "object" },
+        "supportedCount": { "type": "integer" },
+        "globalMarginPct": { "type": "number" },
+        "currencyMargins": { "type": "object" },
+        "provider": { "type": "string", "maxLength": 120 },
+        "attributionUrl": { "type": "string", "maxLength": 200 },
+        "updatedAt": { "type": "string", "maxLength": 40 },
+        "nextUpdateAt": { "type": "string", "maxLength": 40 },
+        "jpyUpdatedAt": { "type": "string", "maxLength": 40 },
+        "lastSyncStatus": { "type": "string", "enum": ["ok", "stale", "error"] }
+      },
+      "required": ["base", "rates", "globalMarginPct", "provider", "updatedAt", "lastSyncStatus"]
+    },
+    "RegisteredVessel": {
+      "title": "RegisteredVessel",
+      "description": "Registered export Ro-Ro or container vessel with MMSI/IMO identifiers, latest AISStream position, and manual coordinator fallback.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "mmsi": { "type": "string", "pattern": "^[0-9]{9}$" },
+        "imo": { "type": "string", "maxLength": 20 },
+        "callSign": { "type": "string", "maxLength": 24 },
+        "carrier": { "type": "string", "maxLength": 80 },
+        "voyageNumber": { "type": "string", "maxLength": 40 },
+        "originPort": { "type": "string", "maxLength": 80 },
+        "destinationPort": { "type": "string", "maxLength": 100 },
+        "etaReported": { "type": "string", "maxLength": 60 },
+        "etaManual": { "type": "string", "maxLength": 40 },
+        "latitude": { "type": "number" },
+        "longitude": { "type": "number" },
+        "speedKnots": { "type": "number" },
+        "courseDeg": { "type": "number" },
+        "headingDeg": { "type": "number" },
+        "aisDestination": { "type": "string", "maxLength": 100 },
+        "lastAisUpdateAt": { "type": "string", "maxLength": 40 },
+        "manualStatus": { "type": "string", "maxLength": 80 },
+        "manualLocationNote": { "type": "string", "maxLength": 500 },
+        "manualUpdatedAt": { "type": "string", "maxLength": 40 },
+        "trackingEnabled": { "type": "boolean" }
+      },
+      "required": ["name", "mmsi", "trackingEnabled"]
+    },
+    "ApiIntegrationConfig": {
+      "title": "ApiIntegrationConfig",
+      "description": "Non-secret integration toggle configuration, sync timestamps, and error logs (API keys are strictly server environment variables).",
+      "type": "object",
+      "properties": {
+        "exchangeRateEnabled": { "type": "boolean" },
+        "vesselTrackingEnabled": { "type": "boolean" },
+        "commercialDisplayConfirmed": { "type": "boolean" },
+        "lastFxSyncAt": { "type": "string", "maxLength": 40 },
+        "lastAisSyncAt": { "type": "string", "maxLength": 40 },
+        "errorLogs": { "type": "array" }
+      },
+      "required": ["exchangeRateEnabled", "vesselTrackingEnabled", "commercialDisplayConfirmed"]
     }
   },
   "firestore": {
@@ -589,6 +652,18 @@
     "/staffInvitations/{inviteId}": {
       "schema": { "$ref": "#/entities/StaffInvitation" },
       "description": "Admin-created employee onboarding invitations claimed atomically upon verified sign-in."
+    },
+    "/exchangeRates/{docId}": {
+      "schema": { "$ref": "#/entities/ExchangeRateCache" },
+      "description": "24-hour cached ExchangeRate-API USD and JPY currency rates plus admin margin settings."
+    },
+    "/vessels/{vesselId}": {
+      "schema": { "$ref": "#/entities/RegisteredVessel" },
+      "description": "Registered export vessels with MMSI/IMO identifiers, latest AISStream telemetry, and manual fallback status."
+    },
+    "/apiIntegrations/{docId}": {
+      "schema": { "$ref": "#/entities/ApiIntegrationConfig" },
+      "description": "Staff-only non-secret API integration toggles, commercial permission confirmation, and sync/error logs."
     }
   }
 }
