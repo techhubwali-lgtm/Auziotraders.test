@@ -13,6 +13,8 @@ import {
   Gavel,
   GitCompare,
   Info,
+  Lock,
+  LogIn,
   MapPin,
   Radio,
   RefreshCw,
@@ -23,8 +25,8 @@ import {
   X,
 } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { CarapisDealerStock } from '../components/CarapisDealerStock';
 import { CatalogSidebar } from '../components/CatalogSidebar';
-import { DealerStockCatalog } from '../components/DealerStockCatalog';
 import {
   PRICE_TIERS,
   SearchFilterBanner,
@@ -41,24 +43,27 @@ import type {
   CifBreakdown,
   CompanySettings,
   CurrencyCode,
-  DealerStockVehicle,
   LiveAuctionMetaResponse,
+  UserProfile,
   Vehicle,
 } from '../types/portal';
 
 interface CatalogViewProps {
   vehicles: Vehicle[];
-  dealerStock?: DealerStockVehicle[];
   currency: CurrencyCode;
   selectedPortId: string;
   settings: CompanySettings;
   liveFxRates?: Record<string, number>;
+  jpyFxRates?: Record<string, number>;
+  isAuthenticated?: boolean;
+  userProfile?: UserProfile | null;
   externalSourceMode?: CatalogSourceMode;
   externalFilters?: Partial<CatalogFilterState> | null;
   externalSearchNonce?: number;
   embedded?: boolean;
   compareIds: string[];
   canImportToFirestore: boolean;
+  onOpenLogin?: (mode?: 'login' | 'signup') => void;
   onSourceModeChange?: (mode: CatalogSourceMode) => void;
   onDealerInquirySubmitted?: (code: string) => void;
   onRegisterLiveVehicles: (items: Vehicle[]) => void;
@@ -97,17 +102,20 @@ const JAPAN_ORIGIN_PORTS = ['Yokohama', 'Nagoya', 'Kobe', 'Osaka', 'Hakata'];
 
 export function CatalogView({
   vehicles,
-  dealerStock = [],
   currency,
   selectedPortId,
   settings,
   liveFxRates,
+  jpyFxRates,
+  isAuthenticated = false,
+  userProfile = null,
   externalSourceMode,
   externalFilters,
   externalSearchNonce,
   embedded = false,
   compareIds,
   canImportToFirestore,
+  onOpenLogin,
   onSourceModeChange,
   onDealerInquirySubmitted,
   onRegisterLiveVehicles,
@@ -124,6 +132,7 @@ export function CatalogView({
   const [sourceMode, setSourceModeState] = useState<CatalogSourceMode>(
     externalSourceMode || 'curated'
   );
+  const [dealerStockCount, setDealerStockCount] = useState<number>(0);
   const [filters, setFilters] = useState<CatalogFilterState>({
     ...INITIAL_FILTERS,
     ...(externalFilters || {}),
@@ -181,9 +190,9 @@ export function CatalogView({
     };
   }, []);
 
-  // Fetch live auction lots when in live_auctions mode
+  // Fetch live auction lots ONLY when in live_auctions mode AND logged in as dealer/staff
   useEffect(() => {
-    if (sourceMode !== 'live_auctions') return;
+    if (sourceMode !== 'live_auctions' || !isAuthenticated) return;
 
     const controller = new AbortController();
     const timer = setTimeout(() => {
@@ -248,6 +257,7 @@ export function CatalogView({
     };
   }, [
     sourceMode,
+    isAuthenticated,
     liveTable,
     liveAuctionHouse,
     filters.make,
@@ -659,9 +669,13 @@ export function CatalogView({
                       : 'bg-amber-50 text-amber-950 border-amber-300 hover:bg-amber-100'
                   }`}
                 >
-                  <Radio className="w-3.5 h-3.5" />
-                  Live Japanese Auctions
-                  {liveMeta?.ok && liveMeta.totalEstimatedLots > 0 && (
+                  {isAuthenticated ? (
+                    <Radio className="w-3.5 h-3.5" />
+                  ) : (
+                    <Lock className="w-3.5 h-3.5" />
+                  )}
+                  <span>Live Auctions</span>
+                  {isAuthenticated && liveMeta?.ok && liveMeta.totalEstimatedLots > 0 && (
                     <span
                       className={`font-mono text-[11px] px-1.5 py-0.5 rounded ${
                         sourceMode === 'live_auctions'
@@ -684,8 +698,8 @@ export function CatalogView({
                   }`}
                 >
                   <Building2 className="w-3.5 h-3.5" />
-                  <span>Japanese Dealer Stock</span>
-                  {dealerStock.filter((d) => d.status !== 'sold').length > 0 && (
+                  <span>Dealer Stock</span>
+                  {dealerStockCount > 0 && (
                     <span
                       className={`font-mono text-[11px] px-1.5 py-0.5 rounded ${
                         sourceMode === 'dealer_stock'
@@ -693,7 +707,7 @@ export function CatalogView({
                           : 'bg-slate-200 text-slate-800'
                       }`}
                     >
-                      {dealerStock.filter((d) => d.status !== 'sold').length.toLocaleString()}
+                      {dealerStockCount.toLocaleString()}
                     </span>
                   )}
                 </button>
@@ -756,8 +770,8 @@ export function CatalogView({
                 </button>
               </div>
 
-              {/* Live Auction Source Banner (shown in Live Auctions mode) */}
-              {sourceMode === 'live_auctions' && (
+              {/* Live Auction Source Banner (shown only to logged-in dealers in Live Auctions mode) */}
+              {sourceMode === 'live_auctions' && isAuthenticated && (
                 <div className="p-3.5 bg-slate-950 text-white rounded-lg space-y-3 text-xs">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="space-y-0.5 min-w-0">
@@ -853,115 +867,162 @@ export function CatalogView({
                 </div>
               )}
 
-              {/* Row 2: View Vehicles Shipping From (Japan Dispatch Terminals) */}
-              <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                  <span className="text-slate-500 font-medium inline-flex items-center gap-1 mr-1">
-                    <MapPin className="w-3.5 h-3.5 text-amber-600" />
-                    Shipping from Japan port:
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => updateFilters({ originPort: 'ALL' })}
-                    className={`px-2.5 py-1 rounded border text-[11px] font-semibold cursor-pointer ${
-                      filters.originPort === 'ALL'
-                        ? 'bg-slate-900 text-white border-slate-900'
-                        : 'bg-white text-slate-700 border-slate-300 hover:border-amber-600'
-                    }`}
-                  >
-                    All Ports
-                  </button>
-                  {JAPAN_ORIGIN_PORTS.map((port) => (
+              {/* Row 2 & 3: Japan Port Filter + Active Chips (hidden in Dealer Stock mode which has its own filter bar) */}
+              {sourceMode !== 'dealer_stock' && (
+                <>
+                  <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-3">
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                      <span className="text-slate-500 font-medium inline-flex items-center gap-1 mr-1">
+                        <MapPin className="w-3.5 h-3.5 text-amber-600" />
+                        Shipping from Japan port:
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => updateFilters({ originPort: 'ALL' })}
+                        className={`px-2.5 py-1 rounded border text-[11px] font-semibold cursor-pointer ${
+                          filters.originPort === 'ALL'
+                            ? 'bg-slate-900 text-white border-slate-900'
+                            : 'bg-white text-slate-700 border-slate-300 hover:border-amber-600'
+                        }`}
+                      >
+                        All Ports
+                      </button>
+                      {JAPAN_ORIGIN_PORTS.map((port) => (
+                        <button
+                          key={port}
+                          type="button"
+                          onClick={() =>
+                            updateFilters({
+                              originPort: filters.originPort === port ? 'ALL' : port,
+                            })
+                          }
+                          className={`px-2.5 py-1 rounded border text-[11px] font-semibold cursor-pointer ${
+                            filters.originPort === port
+                              ? 'bg-amber-600 text-white border-amber-600'
+                              : 'bg-white text-slate-700 border-slate-300 hover:border-amber-600'
+                          }`}
+                        >
+                          {port}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Sort Selector */}
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="text-slate-500">Sort:</span>
+                      <select
+                        aria-label="Sort vehicles"
+                        value={sortBy}
+                        onChange={(e) => setSortBy(e.target.value as SortKey)}
+                        className="px-2.5 py-1 text-xs font-medium bg-slate-50 border border-slate-300 rounded-md focus:outline-none focus:border-amber-600 cursor-pointer"
+                      >
+                        <option value="featured">Featured First</option>
+                        <option value="fob_asc">Price: Low to High</option>
+                        <option value="fob_desc">Price: High to Low</option>
+                        <option value="year_desc">Year: Newest First</option>
+                        <option value="mileage_asc">Mileage: Lowest First</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Active Filter Chips + Honest Workflow Link */}
+                  <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-mono text-slate-600">
+                        {sourceMode === 'live_auctions' ? (
+                          <>
+                            <strong className="text-slate-950">
+                              {liveTotalMatches.toLocaleString()}
+                            </strong>{' '}
+                            live lots (showing {filteredVehicles.length} on page {livePage}) · CIF
+                            to <strong className="text-slate-950">{activePort.name}</strong> (
+                            {currency})
+                          </>
+                        ) : (
+                          <>
+                            <strong className="text-slate-950">{filteredVehicles.length}</strong>{' '}
+                            matches · CIF to{' '}
+                            <strong className="text-slate-950">{activePort.name}</strong> (
+                            {currency})
+                          </>
+                        )}
+                      </span>
+                      {activeChips.map((chip) => (
+                        <button
+                          key={chip.label}
+                          type="button"
+                          onClick={chip.clear}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-950 border border-amber-200 rounded text-[11px] font-semibold hover:bg-amber-100 cursor-pointer"
+                        >
+                          <span>{chip.label}</span>
+                          <X className="w-3 h-3" />
+                        </button>
+                      ))}
+                    </div>
+
                     <button
-                      key={port}
                       type="button"
-                      onClick={() =>
-                        updateFilters({
-                          originPort: filters.originPort === port ? 'ALL' : port,
-                        })
-                      }
-                      className={`px-2.5 py-1 rounded border text-[11px] font-semibold cursor-pointer ${
-                        filters.originPort === port
-                          ? 'bg-amber-600 text-white border-amber-600'
-                          : 'bg-white text-slate-700 border-slate-300 hover:border-amber-600'
-                      }`}
+                      onClick={onOpenWorkflowStatus}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 hover:text-amber-700 cursor-pointer whitespace-nowrap"
                     >
-                      {port}
+                      <Info className="w-3.5 h-3.5 text-amber-600" />
+                      Auction &amp; Payment Disclosure
                     </button>
-                  ))}
-                </div>
-
-                {/* Sort Selector */}
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="text-slate-500">Sort:</span>
-                  <select
-                    aria-label="Sort vehicles"
-                    value={sortBy}
-                    onChange={(e) => setSortBy(e.target.value as SortKey)}
-                    className="px-2.5 py-1 text-xs font-medium bg-slate-50 border border-slate-300 rounded-md focus:outline-none focus:border-amber-600 cursor-pointer"
-                  >
-                    <option value="featured">Featured First</option>
-                    <option value="fob_asc">Price: Low to High</option>
-                    <option value="fob_desc">Price: High to Low</option>
-                    <option value="year_desc">Year: Newest First</option>
-                    <option value="mileage_asc">Mileage: Lowest First</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Active Filter Chips + Honest Workflow Link */}
-              <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center justify-between gap-2 text-xs">
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <span className="font-mono text-slate-600">
-                    {sourceMode === 'live_auctions' ? (
-                      <>
-                        <strong className="text-slate-950">
-                          {liveTotalMatches.toLocaleString()}
-                        </strong>{' '}
-                        live lots (showing {filteredVehicles.length} on page {livePage}) · CIF to{' '}
-                        <strong className="text-slate-950">{activePort.name}</strong> ({currency})
-                      </>
-                    ) : (
-                      <>
-                        <strong className="text-slate-950">{filteredVehicles.length}</strong>{' '}
-                        matches · CIF to{' '}
-                        <strong className="text-slate-950">{activePort.name}</strong> ({currency})
-                      </>
-                    )}
-                  </span>
-                  {activeChips.map((chip) => (
-                    <button
-                      key={chip.label}
-                      type="button"
-                      onClick={chip.clear}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 bg-amber-50 text-amber-950 border border-amber-200 rounded text-[11px] font-semibold hover:bg-amber-100 cursor-pointer"
-                    >
-                      <span>{chip.label}</span>
-                      <X className="w-3 h-3" />
-                    </button>
-                  ))}
-                </div>
-
-                <button
-                  type="button"
-                  onClick={onOpenWorkflowStatus}
-                  className="inline-flex items-center gap-1 text-[11px] font-semibold text-slate-600 hover:text-amber-700 cursor-pointer whitespace-nowrap"
-                >
-                  <Info className="w-3.5 h-3.5 text-amber-600" />
-                  Auction &amp; Payment Disclosure
-                </button>
-              </div>
+                  </div>
+                </>
+              )}
             </div>
 
-            {/* Dedicated Japanese Dealer Stock Storefront (separate from Auction & Curated Stock) */}
+            {/* Dedicated Japanese Dealer Stock Storefront (Carapis Cached Feed) */}
             {sourceMode === 'dealer_stock' ? (
-              <DealerStockCatalog
-                vehicles={dealerStock}
-                currency={currency}
-                selectedPortId={selectedPortId}
+              <CarapisDealerStock
                 settings={settings}
+                liveFxRates={liveFxRates}
+                jpyFxRates={jpyFxRates}
+                selectedPortId={selectedPortId}
+                canViewDealerPrices={isAuthenticated}
+                userProfile={userProfile}
+                onOpenLogin={(mode) => onOpenLogin?.(mode || 'login')}
                 onInquirySubmitted={onDealerInquirySubmitted}
+                onCountLoaded={setDealerStockCount}
               />
+            ) : sourceMode === 'live_auctions' && !isAuthenticated ? (
+              <div className="bg-white border border-slate-200 rounded-2xl p-8 sm:p-10 text-center space-y-4 shadow-2xs">
+                <div className="w-12 h-12 rounded-2xl bg-slate-950 text-amber-400 flex items-center justify-center mx-auto">
+                  <Lock className="w-6 h-6" />
+                </div>
+                <div className="space-y-1.5 max-w-lg mx-auto">
+                  <div className="text-xs font-bold uppercase tracking-wider text-amber-600">
+                    Registered Dealers Only
+                  </div>
+                  <h3 className="text-xl font-extrabold text-slate-950">
+                    Log in as a Dealer to Access Live Japanese Auctions
+                  </h3>
+                  <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                    Live auction lanes (USS, TAA, CAA, HAA) and full landed pricing are restricted
+                    to logged-in dealers. Sign in to unlock live auction lots, or browse our
+                    Japanese Dealer Stock preview right now.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center justify-center gap-3 pt-1">
+                  <button
+                    type="button"
+                    onClick={() => onOpenLogin?.('login')}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-950 hover:bg-slate-800 text-amber-400 text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    <LogIn className="w-4 h-4" />
+                    <span>Log in to View Live Auctions</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSourceMode('dealer_stock')}
+                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-900 text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    <Building2 className="w-4 h-4 text-amber-700" />
+                    <span>Browse Dealer Stock</span>
+                  </button>
+                </div>
+              </div>
             ) : (
               <>
             {/* Live Feed Error / Notice Banner */}

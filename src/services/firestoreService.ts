@@ -1818,14 +1818,25 @@ export async function createFinanceRecord(
 
 export async function updateFinanceRecordStatus(
   id: string,
-  updates: { status: FinanceRecord['status']; reconciled: boolean }
+  updates: { status: FinanceRecord['status']; reconciled: boolean; notes?: string }
 ): Promise<void> {
   const path = `financeRecords/${id}`;
   try {
-    await updateDoc(doc(db, 'financeRecords', id), {
+    const payload: Record<string, unknown> = {
       status: updates.status,
       reconciled: Boolean(updates.reconciled),
       updatedAt: serverTimestamp(),
+    };
+    if (typeof updates.notes === 'string') {
+      payload.notes = updates.notes.trim().slice(0, 800);
+    }
+    await updateDoc(doc(db, 'financeRecords', id), payload);
+    void recordAuditLog({
+      actorRole: 'accounts',
+      action: updates.reconciled ? 'finance_approved_reconciled' : 'finance_status_updated',
+      targetType: 'financeRecord',
+      targetId: id,
+      summary: `Finance record ${id} set to ${updates.status} (reconciled=${String(updates.reconciled)})${updates.notes ? ` — ${updates.notes.slice(0, 160)}` : ''}.`,
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, path);
@@ -1969,13 +1980,21 @@ export async function createHrLeaveRequest(
 export async function reviewHrLeaveRequest(
   id: string,
   status: 'approved' | 'rejected',
-  reviewedByName: string
+  reviewedByName: string,
+  reasonNote?: string
 ): Promise<void> {
   try {
     await updateDoc(doc(db, 'hrLeaveRequests', id), {
       status,
       reviewedByName: reviewedByName.trim().slice(0, 100),
       updatedAt: serverTimestamp(),
+    });
+    void recordAuditLog({
+      actorRole: 'hr',
+      action: status === 'approved' ? 'hr_leave_approved' : 'hr_leave_rejected',
+      targetType: 'hrLeaveRequest',
+      targetId: id,
+      summary: `Leave request ${id} ${status.toUpperCase()} by ${reviewedByName}${reasonNote ? ` — Reason: ${reasonNote.slice(0, 180)}` : ''}.`,
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `hrLeaveRequests/${id}`);
@@ -2041,6 +2060,41 @@ export async function updateTeamTaskStatus(id: string, status: TeamTask['status'
     await updateDoc(doc(db, 'teamTasks', id), {
       status,
       updatedAt: serverTimestamp(),
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `teamTasks/${id}`);
+  }
+}
+
+export async function updateTeamTaskDetails(
+  id: string,
+  updates: Partial<
+    Pick<
+      TeamTask,
+      'title' | 'description' | 'department' | 'assignedToName' | 'priority' | 'status' | 'dueDate'
+    >
+  >
+): Promise<void> {
+  const payload: Record<string, unknown> = { updatedAt: serverTimestamp() };
+  if (typeof updates.title === 'string') payload.title = updates.title.trim().slice(0, 140);
+  if (typeof updates.description === 'string')
+    payload.description = updates.description.trim().slice(0, 800);
+  if (typeof updates.department === 'string')
+    payload.department = updates.department.trim().slice(0, 60);
+  if (typeof updates.assignedToName === 'string')
+    payload.assignedToName = updates.assignedToName.trim().slice(0, 100);
+  if (updates.priority) payload.priority = updates.priority;
+  if (updates.status) payload.status = updates.status;
+  if (typeof updates.dueDate === 'string') payload.dueDate = updates.dueDate.trim().slice(0, 32);
+
+  try {
+    await updateDoc(doc(db, 'teamTasks', id), payload);
+    void recordAuditLog({
+      actorRole: 'management',
+      action: 'team_task_updated',
+      targetType: 'teamTask',
+      targetId: id,
+      summary: `Updated task ${id}${updates.status ? ` status=${updates.status}` : ''}${updates.dueDate ? ` due=${updates.dueDate}` : ''}.`,
     });
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `teamTasks/${id}`);

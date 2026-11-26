@@ -261,7 +261,7 @@ interface StaffConsoleViewProps {
   ) => Promise<void>;
   onUpdateFinanceStatus: (
     id: string,
-    updates: { status: FinanceRecordStatus; reconciled: boolean }
+    updates: { status: FinanceRecordStatus; reconciled: boolean; notes?: string }
   ) => Promise<void>;
   onDeleteFinanceRecord: (id: string) => Promise<void>;
   onSaveHrEmployee: (
@@ -272,9 +272,22 @@ interface StaffConsoleViewProps {
   onCreateHrLeave: (
     input: Omit<HrLeaveRequest, 'id' | 'status' | 'reviewedByName' | 'createdAt' | 'updatedAt'>
   ) => Promise<void>;
-  onReviewHrLeave: (id: string, status: 'approved' | 'rejected') => Promise<void>;
+  onReviewHrLeave: (
+    id: string,
+    status: 'approved' | 'rejected',
+    reasonNote?: string
+  ) => Promise<void>;
   onCreateTeamTask: (input: Omit<TeamTask, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
   onUpdateTeamTaskStatus: (id: string, status: TeamTask['status']) => Promise<void>;
+  onUpdateTeamTaskDetails: (
+    id: string,
+    updates: Partial<
+      Pick<
+        TeamTask,
+        'title' | 'description' | 'department' | 'assignedToName' | 'priority' | 'status' | 'dueDate'
+      >
+    >
+  ) => Promise<void>;
   onDeleteTeamTask: (id: string) => Promise<void>;
   onPostTeamMessage: (channel: TeamChannelId, body: string) => Promise<void>;
   onSaveSalesTarget: (
@@ -360,6 +373,7 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
     onReviewHrLeave,
     onCreateTeamTask,
     onUpdateTeamTaskStatus,
+    onUpdateTeamTaskDetails,
     onDeleteTeamTask,
     onPostTeamMessage,
     onSaveSalesTarget,
@@ -398,6 +412,33 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
   const [universalSearch, setUniversalSearch] = useState('');
   const [searchFocused, setSearchFocused] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [quickMenuOpen, setQuickMenuOpen] = useState(false);
+  const [nowClock, setNowClock] = useState(() => new Date());
+  const [readNotificationIds, setReadNotificationIds] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(`auzio_read_notif_${staffProfile?.uid || 'staff'}`);
+      return saved ? (JSON.parse(saved) as string[]) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  useEffect(() => {
+    const t = setInterval(() => setNowClock(new Date()), 30000);
+    return () => clearInterval(t);
+  }, []);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        `auzio_read_notif_${staffProfile?.uid || 'staff'}`,
+        JSON.stringify(readNotificationIds.slice(-100))
+      );
+    } catch {
+      // ignore
+    }
+  }, [readNotificationIds, staffProfile?.uid]);
 
   // AI prefill state (when triggered from Dashboard or CRM)
   const [aiPreset, setAiPreset] = useState<{
@@ -722,56 +763,211 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
     return results.slice(0, 10);
   }, [universalSearch, orders, vehicles, users, inquiries, financeRecords, hrEmployees, role, staffProfile]);
 
-  // Internal Notifications List
+  // Real-Time Permission-Scoped Notification Center
   const notifications = useMemo(() => {
-    const list: Array<{ id: string; title: string; detail: string; section: ConsoleSection }> = [];
+    const list: Array<{
+      id: string;
+      category: string;
+      title: string;
+      detail: string;
+      section: ConsoleSection;
+      urgent?: boolean;
+    }> = [];
+
+    const unverifiedBuyers = users.filter(
+      (u) => (u.role === 'customer' || u.role === 'dealer') && !u.verified
+    );
+    if (unverifiedBuyers.length > 0 && can('users', 'view')) {
+      list.push({
+        id: `n-kyc-${unverifiedBuyers.length}`,
+        category: 'Registrations',
+        title: `${unverifiedBuyers.length} buyer account${unverifiedBuyers.length === 1 ? '' : 's'} awaiting verification`,
+        detail: 'Review KYC details in Approvals Center or Users & Roles.',
+        section: 'dashboard',
+      });
+    }
+
     const newLeads = inquiries.filter((i) => i.status === 'received');
     if (newLeads.length > 0 && can('crm', 'view')) {
       list.push({
-        id: 'n-leads',
+        id: `n-leads-${newLeads.length}`,
+        category: 'CRM & Leads',
         title: `${newLeads.length} new buyer inquir${newLeads.length === 1 ? 'y' : 'ies'}`,
         detail: 'Waiting for sales follow-up and CIF confirmation.',
         section: 'crm',
       });
     }
+
     const newSourcing = sourcingRequests.filter((r) => r.status === 'new');
     if (newSourcing.length > 0 && can('auctions', 'view')) {
       list.push({
-        id: 'n-sourcing',
+        id: `n-sourcing-${newSourcing.length}`,
+        category: 'Auctions',
         title: `${newSourcing.length} open auction sourcing request${newSourcing.length === 1 ? '' : 's'}`,
         detail: 'Attach shortlisted Japanese auction lots & translated notes.',
         section: 'auctions',
       });
     }
+
     const approvedQuotes = quotations.filter((q) => q.status === 'approved');
     if (approvedQuotes.length > 0 && can('sales', 'view')) {
       list.push({
-        id: 'n-quotes',
+        id: `n-quotes-${approvedQuotes.length}`,
+        category: 'Sales & Orders',
         title: `${approvedQuotes.length} customer-approved quotation${approvedQuotes.length === 1 ? '' : 's'}`,
         detail: 'Ready to convert into active Export Orders.',
         section: 'sales',
       });
     }
+
+    const overdueFin = financeRecords.filter((f) => f.status === 'overdue');
+    if (overdueFin.length > 0 && can('accounts', 'view')) {
+      list.push({
+        id: `n-overdue-${overdueFin.length}`,
+        category: 'Finance Alert',
+        title: `${overdueFin.length} overdue invoice${overdueFin.length === 1 ? '' : 's'}`,
+        detail: 'Follow up with buyer for TT remittance confirmation.',
+        section: 'accounts',
+        urgent: true,
+      });
+    }
+
+    const pendingPayments = financeRecords.filter(
+      (f) => f.type === 'payment' && f.status === 'pending'
+    );
+    if (pendingPayments.length > 0 && can('accounts', 'view')) {
+      list.push({
+        id: `n-pay-${pendingPayments.length}`,
+        category: 'Payments',
+        title: `${pendingPayments.length} pending payment verification${pendingPayments.length === 1 ? '' : 's'}`,
+        detail: 'Confirm bank wire receipt and mark reconciled.',
+        section: 'accounts',
+      });
+    }
+
     const pendingLeaves = hrLeaveRequests.filter((l) => l.status === 'pending');
     if (pendingLeaves.length > 0 && can('hr', 'view')) {
       list.push({
-        id: 'n-leaves',
+        id: `n-leaves-${pendingLeaves.length}`,
+        category: 'HR & Leave',
         title: `${pendingLeaves.length} pending HR leave request${pendingLeaves.length === 1 ? '' : 's'}`,
         detail: 'Awaiting manager approval or rejection.',
         section: 'hr',
       });
     }
-    const overdueFin = financeRecords.filter((f) => f.status === 'overdue');
-    if (overdueFin.length > 0 && can('accounts', 'view')) {
+
+    const todayIso = new Date().toISOString().slice(0, 10);
+    const delayedOrders = orders.filter(
+      (o) => o.etaDate && o.etaDate < todayIso && !['arrived_port', 'completed'].includes(o.milestone)
+    );
+    if (delayedOrders.length > 0 && can('logistics', 'view')) {
       list.push({
-        id: 'n-overdue',
-        title: `${overdueFin.length} overdue invoice${overdueFin.length === 1 ? '' : 's'}`,
-        detail: 'Follow up with buyer for TT remittance confirmation.',
-        section: 'accounts',
+        id: `n-delay-${delayedOrders.length}`,
+        category: 'Logistics',
+        title: `${delayedOrders.length} shipment${delayedOrders.length === 1 ? '' : 's'} past ETA`,
+        detail: 'Verify live vessel AIS status and notify consignee.',
+        section: 'logistics',
+        urgent: true,
       });
     }
+
+    const pendingReviews = testimonials.filter((t) => !t.approved);
+    if (pendingReviews.length > 0 && can('cms', 'view')) {
+      list.push({
+        id: `n-cms-${pendingReviews.length}`,
+        category: 'Website CMS',
+        title: `${pendingReviews.length} customer review${pendingReviews.length === 1 ? '' : 's'} pending approval`,
+        detail: 'Publish verified buyer testimonials to storefront.',
+        section: 'cms',
+      });
+    }
+
+    if ((integrationConfig.errorLogs || []).some((e) => e.level === 'error') && can('settings', 'view')) {
+      list.push({
+        id: `n-api-err-${(integrationConfig.errorLogs || []).length}`,
+        category: 'System Health',
+        title: 'API integration warning logged',
+        detail: 'Inspect ExchangeRate-API / AISStream logs in Integrations.',
+        section: 'integrations',
+      });
+    }
+
     return list;
-  }, [inquiries, sourcingRequests, quotations, hrLeaveRequests, financeRecords, role, staffProfile]);
+  }, [
+    users,
+    inquiries,
+    sourcingRequests,
+    quotations,
+    hrLeaveRequests,
+    financeRecords,
+    orders,
+    testimonials,
+    integrationConfig.errorLogs,
+    role,
+    staffProfile,
+  ]);
+
+  const unreadNotifications = useMemo(
+    () => notifications.filter((n) => !readNotificationIds.includes(n.id)),
+    [notifications, readNotificationIds]
+  );
+
+  const handleDashboardQuickAction = (actionId: string) => {
+    setQuickMenuOpen(false);
+    switch (actionId) {
+      case 'add_vehicle':
+      case 'publish_vehicle':
+        if (can('inventory', 'create')) {
+          setEditingVehicle(null);
+          setIsImportMode(false);
+          setActiveSection('inventory');
+          setVehicleModalOpen(true);
+        } else {
+          setActiveSection('inventory');
+        }
+        break;
+      case 'add_customer':
+      case 'add_lead':
+        setActiveSection('crm');
+        break;
+      case 'create_quotation':
+        setActiveSection('sales');
+        break;
+      case 'create_order':
+        setActiveSection('orders');
+        break;
+      case 'proforma_invoice':
+      case 'commercial_invoice':
+      case 'record_payment':
+      case 'record_expense':
+        setActiveSection('accounts');
+        break;
+      case 'create_shipment':
+        setActiveSection('logistics');
+        break;
+      case 'auction_bid':
+        setActiveSection('auctions');
+        break;
+      case 'add_employee':
+        setActiveSection('hr');
+        break;
+      case 'create_user':
+        setActiveSection('users');
+        break;
+      case 'upload_document':
+        setActiveSection('documents');
+        break;
+      case 'create_announcement':
+      case 'update_website':
+        setActiveSection('cms');
+        break;
+      case 'generate_report':
+        setActiveSection('reports');
+        break;
+      default:
+        setActiveSection('dashboard');
+    }
+  };
 
   const filteredVehicles = useMemo(() => {
     const q = invSearch.trim().toLowerCase();
@@ -1062,61 +1258,170 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
             )}
           </div>
 
-          {/* Right Controls: Notifications & Dark/Light Theme */}
+          {/* Right Controls: Connectivity, Live Clock, Quick Action, Notifications, Theme & Profile */}
           <div className="flex items-center gap-2 shrink-0">
+            {/* Real System Connectivity Indicator */}
+            <button
+              type="button"
+              onClick={() => setActiveSection('integrations')}
+              title={`Firestore: ${props.isLiveFirestoreMode ? 'Connected' : 'Local'} | FX API: ${liveFx.ok ? 'Online' : 'Offline'} | AIS: ${aisStatus?.connected ? 'Connected' : aisStatus?.state || 'Standby'}`}
+              className="hidden xl:inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px] font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  props.isLiveFirestoreMode && liveFx.ok
+                    ? 'bg-emerald-500'
+                    : props.isLiveFirestoreMode
+                    ? 'bg-amber-500'
+                    : 'bg-rose-500'
+                }`}
+              />
+              <span>
+                {props.isLiveFirestoreMode && liveFx.ok
+                  ? 'Systems Online'
+                  : props.isLiveFirestoreMode
+                  ? 'Partial Sync'
+                  : 'Offline Mode'}
+              </span>
+            </button>
+
+            {/* Live Date & Time */}
+            <div className="hidden 2xl:flex flex-col items-end text-[10px] font-mono leading-tight text-slate-500 dark:text-slate-400 px-1.5">
+              <span>{nowClock.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</span>
+              <span className="font-semibold text-slate-700 dark:text-slate-200">
+                {nowClock.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' })}
+              </span>
+            </div>
+
+            {/* Header Quick Action Menu */}
             <div className="relative">
               <button
                 type="button"
-                onClick={() => setNotificationsOpen((o) => !o)}
+                onClick={() => {
+                  setQuickMenuOpen((o) => !o);
+                  setNotificationsOpen(false);
+                  setProfileMenuOpen(false);
+                }}
+                className="inline-flex items-center gap-1.5 px-2.5 py-2 rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">Quick Action</span>
+              </button>
+              {quickMenuOpen && (
+                <div className="absolute right-0 top-full mt-2 w-56 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden text-xs">
+                  <div className="px-3.5 py-2 border-b border-slate-100 dark:border-slate-800 font-bold uppercase text-[10px] tracking-wider text-slate-500">
+                    Launch Action
+                  </div>
+                  {[
+                    ['add_vehicle', 'Add Vehicle to Stock'],
+                    ['add_lead', 'Manage Leads / CRM'],
+                    ['create_quotation', 'Create CIF Quotation'],
+                    ['create_order', 'Manage Export Orders'],
+                    ['record_payment', 'Record Payment / Expense'],
+                    ['create_shipment', 'Assign Vessel Shipment'],
+                    ['upload_document', 'Upload Export Document'],
+                    ['create_user', 'Provision Employee User'],
+                  ].map(([id, label]) => (
+                    <button
+                      key={id}
+                      type="button"
+                      onClick={() => handleDashboardQuickAction(id)}
+                      className="w-full text-left px-3.5 py-2 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-800 dark:text-slate-200 font-medium cursor-pointer"
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Enhanced Notification Center */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setNotificationsOpen((o) => !o);
+                  setProfileMenuOpen(false);
+                  setQuickMenuOpen(false);
+                }}
                 aria-label="Notifications"
                 className="relative p-2 rounded-lg border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
               >
                 <Bell className="w-4 h-4" />
-                {notifications.length > 0 && (
-                  <span className="absolute -top-1 -right-1 w-4 h-4 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold flex items-center justify-center">
-                    {notifications.length}
+                {unreadNotifications.length > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-4 h-4 px-1 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold flex items-center justify-center tabular-nums">
+                    {unreadNotifications.length}
                   </span>
                 )}
               </button>
 
               {notificationsOpen && (
-                <div className="absolute right-0 top-full mt-2 w-80 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden">
-                  <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div className="absolute right-0 top-full mt-2 w-80 sm:w-96 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between gap-2">
                     <span className="text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
-                      Action Alerts
+                      Notifications ({unreadNotifications.length} unread)
                     </span>
-                    <button
-                      type="button"
-                      onClick={() => setNotificationsOpen(false)}
-                      className="text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      {unreadNotifications.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setReadNotificationIds((prev) =>
+                              Array.from(new Set([...prev, ...notifications.map((n) => n.id)]))
+                            )
+                          }
+                          className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
+                        >
+                          Mark all read
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setNotificationsOpen(false)}
+                        className="text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </div>
                   {notifications.length === 0 ? (
                     <div className="p-5 text-xs text-slate-500 dark:text-slate-400 text-center">
                       All caught up — no pending operational alerts.
                     </div>
                   ) : (
-                    <div className="divide-y divide-slate-100 dark:divide-slate-800">
-                      {notifications.map((n) => (
-                        <button
-                          key={n.id}
-                          type="button"
-                          onClick={() => {
-                            setActiveSection(n.section);
-                            setNotificationsOpen(false);
-                          }}
-                          className="w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-                        >
-                          <div className="text-xs font-bold text-slate-950 dark:text-white">
-                            {n.title}
-                          </div>
-                          <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                            {n.detail}
-                          </div>
-                        </button>
-                      ))}
+                    <div className="divide-y divide-slate-100 dark:divide-slate-800 max-h-96 overflow-y-auto">
+                      {notifications.map((n) => {
+                        const isRead = readNotificationIds.includes(n.id);
+                        return (
+                          <button
+                            key={n.id}
+                            type="button"
+                            onClick={() => {
+                              setReadNotificationIds((prev) =>
+                                prev.includes(n.id) ? prev : [...prev, n.id]
+                              );
+                              setActiveSection(n.section);
+                              setNotificationsOpen(false);
+                            }}
+                            className={`w-full text-left px-4 py-3 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer ${
+                              isRead ? 'opacity-65' : 'bg-amber-50/30 dark:bg-amber-950/10'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wider">
+                              <span className={n.urgent ? 'text-rose-600 dark:text-rose-400' : 'text-amber-600 dark:text-amber-400'}>
+                                {n.category}
+                              </span>
+                              {!isRead && <span className="text-slate-500">Unread</span>}
+                            </div>
+                            <div className="text-xs font-bold text-slate-950 dark:text-white mt-0.5">
+                              {n.title}
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                              {n.detail}
+                            </div>
+                          </button>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1132,18 +1437,86 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
             >
               {darkMode ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4" />}
             </button>
+
+            {/* Profile Dropdown */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => {
+                  setProfileMenuOpen((o) => !o);
+                  setNotificationsOpen(false);
+                  setQuickMenuOpen(false);
+                }}
+                className="flex items-center gap-2 pl-2 pr-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+              >
+                <span className="w-6 h-6 rounded-md bg-slate-950 dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-bold flex items-center justify-center">
+                  {(staffProfile?.displayName || 'A').slice(0, 1).toUpperCase()}
+                </span>
+                <span className="hidden sm:inline text-xs font-semibold text-slate-800 dark:text-slate-200 max-w-[110px] truncate">
+                  {staffProfile?.displayName || 'Admin'}
+                </span>
+              </button>
+              {profileMenuOpen && (
+                <div className="absolute right-0 top-full mt-2 w-60 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl shadow-xl z-50 overflow-hidden text-xs">
+                  <div className="px-4 py-3 border-b border-slate-100 dark:border-slate-800">
+                    <div className="font-bold text-slate-950 dark:text-white truncate">
+                      {staffProfile?.displayName || 'Administrator'}
+                    </div>
+                    <div className="text-[11px] text-slate-500 truncate">{staffProfile?.email}</div>
+                    <div className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 mt-0.5">
+                      {roleLabel} · {staffProfile?.department || 'Executive'}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      setActiveSection('settings');
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
+                  >
+                    System Settings & Security
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      onExitConsole();
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 cursor-pointer"
+                  >
+                    Return to Public Storefront
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProfileMenuOpen(false);
+                      onSignOut();
+                    }}
+                    className="w-full text-left px-4 py-2.5 hover:bg-rose-50 dark:hover:bg-rose-950/40 text-rose-600 dark:text-rose-400 font-semibold border-t border-slate-100 dark:border-slate-800 cursor-pointer"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         </header>
 
         {/* Active Module Content */}
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1600px] w-full mx-auto">
-          {/* 1. ROLE-TAILORED EXECUTIVE / DEPARTMENT DASHBOARD */}
+          {/* 1. SUPER ADMIN BUSINESS COMMAND CENTER */}
           {activeSection === 'dashboard' && (
             <ExecutiveDashboardPanel
               role={role}
               staffProfile={staffProfile}
               currency={currency}
               fxRates={fxRates}
+              settings={settings}
+              liveFx={liveFx}
+              aisStatus={aisStatus}
+              integrationConfig={integrationConfig}
+              isLiveFirestoreMode={props.isLiveFirestoreMode}
               vehicles={vehicles}
               users={users}
               sourcingRequests={sourcingRequests}
@@ -1154,7 +1527,104 @@ export function StaffConsoleView(props: StaffConsoleViewProps) {
               hrEmployees={hrEmployees}
               leaveRequests={hrLeaveRequests}
               teamTasks={teamTasks}
-              onNavigateSection={(sec) => setActiveSection(sec as ConsoleSection)}
+              salesTargets={salesTargets}
+              vessels={vessels}
+              documents={documents}
+              auditLogs={auditLogs}
+              testimonials={testimonials}
+              landingContent={landingContent}
+              approvalHandlers={{
+                onApprovePayment: async (rec) => {
+                  await onUpdateFinanceStatus(rec.id, {
+                    status: 'reconciled',
+                    reconciled: true,
+                    notes: `${rec.notes ? `${rec.notes} | ` : ''}Approved by ${staffProfile?.displayName || 'Super Admin'}`,
+                  });
+                },
+                onRejectPayment: async (rec, reason) => {
+                  await onUpdateFinanceStatus(rec.id, {
+                    status: 'overdue',
+                    reconciled: false,
+                    notes: `REJECTED (${new Date().toISOString().slice(0, 10)}): ${reason}`,
+                  });
+                },
+                onApproveLeave: async (req) => {
+                  await onReviewHrLeave(req.id, 'approved');
+                },
+                onRejectLeave: async (req, reason) => {
+                  await onReviewHrLeave(req.id, 'rejected', reason);
+                },
+                onApproveCustomerVerification: async (u) => {
+                  await onUpdateUserRole(u.uid, {
+                    role: u.role,
+                    verified: true,
+                    assignedRepName: u.assignedRepName || staffProfile?.displayName || 'Sales Desk',
+                    assignedRepEmail: u.assignedRepEmail || staffProfile?.email || 'sales@auziotraders.com',
+                    accountStatus: 'active',
+                  });
+                },
+                onRejectCustomerVerification: async (u, reason) => {
+                  await onUpdateUserRole(u.uid, {
+                    role: u.role,
+                    verified: false,
+                    assignedRepName: u.assignedRepName || '',
+                    assignedRepEmail: u.assignedRepEmail || '',
+                    accountStatus: 'suspended',
+                  });
+                  onNotify(`Verification rejected for ${u.displayName}: ${reason}`);
+                },
+                onApproveTestimonial: async (t) => {
+                  await onSaveTestimonial(
+                    {
+                      customerName: t.customerName,
+                      country: t.country,
+                      vehiclePurchased: t.vehiclePurchased,
+                      photoUrl: t.photoUrl,
+                      rating: t.rating,
+                      reviewText: t.reviewText,
+                      verified: true,
+                      approved: true,
+                    },
+                    t.id
+                  );
+                },
+                onRejectTestimonial: async (t, reason) => {
+                  await onDeleteTestimonial(t.id);
+                  onNotify(`Testimonial rejected & removed: ${reason}`);
+                },
+                onConvertApprovedQuote: async (q) => {
+                  await onConvertQuoteToOrder(q);
+                },
+                onRequestApprovalInfo: async (title, details, assignee) => {
+                  await onCreateTeamTask({
+                    title: title.slice(0, 140),
+                    description: details.slice(0, 800),
+                    department: 'Management',
+                    assignedToName: assignee || staffProfile?.displayName || 'Operations',
+                    priority: 'high',
+                    status: 'todo',
+                    dueDate: new Date(Date.now() + 86400000).toISOString().slice(0, 10),
+                    createdByUid: staffProfile?.uid || 'admin',
+                    createdByName: staffProfile?.displayName || 'Super Admin',
+                  });
+                  onNotify(`Follow-up task created requesting additional details for "${title}"`);
+                },
+              }}
+              onCreateTask={onCreateTeamTask}
+              onUpdateTaskDetails={onUpdateTeamTaskDetails}
+              onRefreshDashboard={async () => {
+                await Promise.allSettled([onRefreshFx(), onRefreshAisStatus()]);
+                onNotify('Dashboard synced with live ExchangeRate-API, AIS & Firestore feeds');
+              }}
+              onRefreshFx={onRefreshFx}
+              onRefreshAis={onRefreshAisStatus}
+              onNavigateSection={(sec, opts) => {
+                if (opts?.search) {
+                  if (sec === 'inventory') setInvSearch(opts.search);
+                }
+                setActiveSection(sec as ConsoleSection);
+              }}
+              onQuickAction={handleDashboardQuickAction}
               onGenerateDailyAiReport={() => {
                 setAiPreset({
                   tool: 'daily_report',

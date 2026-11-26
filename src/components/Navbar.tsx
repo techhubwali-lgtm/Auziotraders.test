@@ -169,7 +169,7 @@ export function Navbar({
     },
     {
       id: 'guide-services-about',
-      label: 'Services & How to Buy',
+      label: 'Services',
       active: activeView === 'how_to_buy',
       onClick: () => onNavigateView('how_to_buy'),
     },

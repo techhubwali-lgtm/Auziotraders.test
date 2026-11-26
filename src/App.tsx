@@ -116,6 +116,7 @@ import {
   updateInquiryStaff,
   updateOrderLogistics,
   updateSourcingRequestStaff,
+  updateTeamTaskDetails,
   updateTeamTaskStatus,
   updateVehicleStatus,
   updateVesselAisTelemetry,
@@ -133,6 +134,7 @@ import type {
   ApiIntegrationConfig,
   AppView,
   AuditLogEntry,
+  CatalogSourceMode,
   CifBreakdown,
   CompanySettings,
   CurrencyCode,
@@ -228,7 +230,7 @@ function formatFirebaseAuthError(err: unknown): string {
 export default function App() {
   // Navigation & Global Trade Preferences (persisted in localStorage)
   const [activeView, setActiveView] = useState<AppView>('home');
-  const [catalogSourceMode, setCatalogSourceMode] = useState<'curated' | 'live_auctions'>('curated');
+  const [catalogSourceMode, setCatalogSourceMode] = useState<CatalogSourceMode>('dealer_stock');
   const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
 
   useEffect(() => {
@@ -1139,7 +1141,7 @@ export default function App() {
 
   // Unified Navigation Handler (normalizes 'catalog' into unified Home #vehicle-catalog)
   const handleNavigateView = useCallback(
-    (view: AppView, opts?: { sourceMode?: 'curated' | 'live_auctions'; anchor?: string }) => {
+    (view: AppView, opts?: { sourceMode?: CatalogSourceMode; anchor?: string }) => {
       if (opts?.sourceMode) {
         setCatalogSourceMode(opts.sourceMode);
       }
@@ -1350,6 +1352,9 @@ export default function App() {
               onCountryChange={handleCountryChange}
               onPortChange={(pid) => handlePortChange(pid)}
               onSourceModeChange={setCatalogSourceMode}
+              onDealerInquirySubmitted={(code) =>
+                notify(`Dealer stock inquiry saved — Reference ${code}`)
+              }
               onNavigateView={handleNavigateView}
               onSelectVehicle={(v) => setSelectedVehicle(v)}
               onOpenProforma={({ vehicle, cif }) => openProformaForVehicle({ vehicle, cif })}
@@ -1701,7 +1706,7 @@ export default function App() {
               }}
               onUpdateFinanceStatus={async (id, updates) => {
                 await updateFinanceRecordStatus(id, updates);
-                notify('Finance status updated');
+                notify('Finance status updated & logged to Audit Trail');
               }}
               onDeleteFinanceRecord={async (id) => {
                 await deleteFinanceRecord(id);
@@ -1719,9 +1724,14 @@ export default function App() {
                 await createHrLeaveRequest(input);
                 notify('Leave request submitted');
               }}
-              onReviewHrLeave={async (id, status) => {
-                await reviewHrLeaveRequest(id, status, activeProfile?.displayName || 'HR Manager');
-                notify(`Leave request ${status}`);
+              onReviewHrLeave={async (id, status, reasonNote) => {
+                await reviewHrLeaveRequest(
+                  id,
+                  status,
+                  activeProfile?.displayName || 'HR Manager',
+                  reasonNote
+                );
+                notify(`Leave request ${status} & logged to Audit Trail`);
               }}
               onCreateTeamTask={async (input) => {
                 await createTeamTask(input);
@@ -1730,6 +1740,10 @@ export default function App() {
               onUpdateTeamTaskStatus={async (id, status) => {
                 await updateTeamTaskStatus(id, status);
                 notify('Task status updated');
+              }}
+              onUpdateTeamTaskDetails={async (id, updates) => {
+                await updateTeamTaskDetails(id, updates);
+                notify('Task updated & rescheduled');
               }}
               onDeleteTeamTask={async (id) => {
                 await deleteTeamTask(id);

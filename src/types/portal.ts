@@ -973,3 +973,78 @@ export interface AisTestConnectionResponse {
   error?: string;
 }
 
+// =============================================================================
+// Carapis Japanese Dealer Stock ("Cars We Can Source From Japan")
+// =============================================================================
+
+export type CatalogSourceMode = 'curated' | 'live_auctions' | 'dealer_stock';
+
+export type CarapisSourceSlug = 'carsensor' | 'goonet' | 'goonet_exchange';
+
+export interface CarapisInspectionInfo {
+  passed?: boolean | null;
+  verified?: boolean | null;
+  sheetUrl?: string | null;
+  summary?: string | null;
+  rawDetails?: Record<string, unknown> | null;
+}
+
+export interface CarapisAccidentInfo {
+  hasAccident: boolean | null;
+  summary?: string | null;
+  details?: string | null;
+}
+
+export interface CarapisPriceHistoryEntry {
+  date: string;
+  priceJpy: number;
+  note?: string;
+}
+
+export interface CarapisPublicListing {
+  id: string;
+  source: CarapisSourceSlug;
+  sourceLabel: 'Carsensor' | 'Goo-net' | 'Goo-net Exchange';
+  make: string;
+  model: string;
+  trim: string;
+  year: number;
+  mileageKm: number | null;
+  priceJpy: number;
+  priceUsdRef: number | null;
+  currency: 'JPY';
+  location: string;
+  fuelType: string;
+  transmission: string;
+  bodyType: string;
+  color: string;
+  photos: string[];
+  inspectionSheet: CarapisInspectionInfo | null;
+  accidentHistory: CarapisAccidentInfo | null;
+  priceHistory: CarapisPriceHistoryEntry[] | null;
+  isNewVehicle: boolean;
+  lastSeenAt: string | null;
+  cachedAt: string;
+}
+
+export interface CarapisListingsResponse {
+  ok: boolean;
+  configured: boolean;
+  listings: CarapisPublicListing[];
+  totalCached: number;
+  sourceCounts: Record<CarapisSourceSlug, number>;
+  lastSyncedAt: string | null;
+  nextSyncAt: string | null;
+  requestsUsedToday: number;
+  dailyLimit: number;
+  syncStatus: {
+    status: 'idle' | 'ok' | 'partial_rate_limited' | 'error' | 'unconfigured';
+    pagesFetched: number;
+    listingsStored: number;
+    rateLimited: boolean;
+    message: string;
+    finishedAt: string | null;
+  };
+}
+
+

@@ -36,7 +36,6 @@ import type {
   CompanySettings,
   CurrencyCode,
   CustomerTestimonial,
-  DealerStockVehicle,
   LandingPageContent,
   LiveExchangeRateState,
   UserProfile,
@@ -46,7 +45,6 @@ import { CatalogView } from './CatalogView';
 
 interface LandingViewProps {
   vehicles: Vehicle[];
-  dealerStock: DealerStockVehicle[];
   currency: CurrencyCode;
   liveFx: LiveExchangeRateState;
   settings: CompanySettings;
@@ -154,7 +152,6 @@ function AnimatedCounter({
 
 export function LandingView({
   vehicles,
-  dealerStock,
   currency,
   liveFx,
   settings,
@@ -590,7 +587,7 @@ export function LandingView({
                     : 'bg-white border border-slate-300 text-slate-700 hover:border-amber-500'
                 }`}
               >
-                <span>Japanese Dealer Stock</span>
+                <span>Dealer Stock</span>
               </button>
             </div>
           </div>
@@ -599,14 +596,17 @@ export function LandingView({
         <CatalogView
           embedded
           vehicles={vehicles}
-          dealerStock={dealerStock}
           currency={currency}
           selectedPortId={selectedPortId}
           settings={settings}
           liveFxRates={liveFx.rates}
+          jpyFxRates={liveFx.jpyRates}
+          isAuthenticated={isAuthenticated}
+          userProfile={userProfile}
           externalSourceMode={catalogSourceMode}
           compareIds={compareIds}
           canImportToFirestore={canImportToFirestore}
+          onOpenLogin={onOpenLogin}
           onSourceModeChange={onSourceModeChange}
           onDealerInquirySubmitted={onDealerInquirySubmitted}
           onRegisterLiveVehicles={onRegisterLiveVehicles}

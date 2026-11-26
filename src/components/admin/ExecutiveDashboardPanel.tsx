@@ -1,63 +1,143 @@
 import {
-  AlertCircle,
+  Activity,
+  ArrowDown,
+  ArrowDownRight,
+  ArrowUp,
   ArrowUpRight,
   BarChart3,
-  Bot,
   Briefcase,
   Calendar,
   Car,
   CheckCircle2,
-  ClipboardList,
-  Clock,
-  CreditCard,
+  ClipboardCheck,
+  DollarSign,
   Download,
+  Eye,
+  EyeOff,
+  FileSpreadsheet,
   FileText,
-  Gavel,
-  ShieldCheck,
+  Globe,
+  LayoutGrid,
+  Lock,
+  Printer,
+  RefreshCw,
   Ship,
+  SlidersHorizontal,
   TrendingUp,
   Users,
+  X,
 } from 'lucide-react';
-import { useMemo } from 'react';
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import {
-  canViewCompanyProfit,
-  canViewSalaries,
-  DEPARTMENT_DASHBOARD_META,
-  hasModulePermission,
-  ROLE_METADATA,
-} from '../../data/permissions';
-import { formatMoney } from '../../data/ports';
+import { useEffect, useMemo, useState } from 'react';
+import { OFFICIAL_LOGO_URL } from '../../data/landingDefaults';
+import { canViewCompanyProfit, hasModulePermission, ROLE_METADATA } from '../../data/permissions';
 import type {
+  AisServiceStatusResponse,
+  ApiIntegrationConfig,
+  AuditLogEntry,
+  CompanySettings,
   CurrencyCode,
+  CustomerTestimonial,
+  ExportDocument,
   ExportOrder,
   FinanceRecord,
   HrEmployee,
   HrLeaveRequest,
   Inquiry,
+  LandingPageContent,
+  LiveExchangeRateState,
   Quotation,
+  RegisteredVessel,
+  SalesTarget,
   SourcingRequest,
   TeamTask,
   UserProfile,
   UserRole,
   Vehicle,
 } from '../../types/portal';
+import {
+  DashboardApprovalsTasks,
+  type ApprovalActionHandlers,
+} from './dashboard/DashboardApprovalsTasks';
+import { DashboardFinancialSales } from './dashboard/DashboardFinancialSales';
+import { DashboardHealthInsights } from './dashboard/DashboardHealthInsights';
+import { DashboardOperationsPanel } from './dashboard/DashboardOperationsPanel';
+import {
+  computeDashboardAnalytics,
+  downloadDashboardCsv,
+  downloadDashboardExcel,
+  resolveDateRange,
+  type DateRangePreset,
+  type KpiMetricItem,
+} from './dashboard/dashboardMetrics';
+
+type DashboardSectionId =
+  | 'kpis'
+  | 'quick_actions'
+  | 'approvals'
+  | 'financial'
+  | 'sales'
+  | 'crm_pipeline'
+  | 'recent_orders'
+  | 'logistics'
+  | 'tasks'
+  | 'website'
+  | 'ai_insights'
+  | 'system_health'
+  | 'audit_logs';
+
+const DEFAULT_SECTION_ORDER: DashboardSectionId[] = [
+  'kpis',
+  'quick_actions',
+  'approvals',
+  'financial',
+  'sales',
+  'crm_pipeline',
+  'recent_orders',
+  'logistics',
+  'tasks',
+  'website',
+  'ai_insights',
+  'system_health',
+  'audit_logs',
+];
+
+const SECTION_LABELS: Record<DashboardSectionId, string> = {
+  kpis: 'Real-Time Business KPI Hub',
+  quick_actions: 'Executive Quick Actions',
+  approvals: 'Pending Approvals Center',
+  financial: 'Financial Intelligence & Cash Flow',
+  sales: 'Sales Performance Analytics',
+  crm_pipeline: 'CRM Sales Pipeline & Follow-Ups',
+  recent_orders: 'Recent Export Orders Table',
+  logistics: 'Logistics & Global Vessel Map',
+  tasks: 'Task & Reminder Management',
+  website: 'Website Performance Overview',
+  ai_insights: 'AI Executive Business Insights',
+  system_health: 'API & System Health Monitor',
+  audit_logs: 'Recent Activity & Audit Trail',
+};
+
+type DashboardViewTab =
+  | 'overview'
+  | 'financial'
+  | 'sales_crm'
+  | 'operations'
+  | 'approvals_tasks'
+  | 'health_ai'
+  | 'all';
+
+type KpiGroupKey = 'financial' | 'sales' | 'crm' | 'inventory' | 'logistics' | 'hr' | 'all';
 
 interface ExecutiveDashboardPanelProps {
   role: UserRole;
   staffProfile: UserProfile | null;
   currency: CurrencyCode;
   fxRates: Record<string, number>;
+  settings: CompanySettings;
+  liveFx: LiveExchangeRateState;
+  aisStatus: AisServiceStatusResponse | null;
+  integrationConfig: ApiIntegrationConfig;
+  isLiveFirestoreMode: boolean;
   vehicles: Vehicle[];
   users: UserProfile[];
   sourcingRequests: SourcingRequest[];
@@ -68,29 +148,72 @@ interface ExecutiveDashboardPanelProps {
   hrEmployees: HrEmployee[];
   leaveRequests: HrLeaveRequest[];
   teamTasks: TeamTask[];
-  onNavigateSection: (section: string) => void;
+  salesTargets: SalesTarget[];
+  vessels: RegisteredVessel[];
+  documents: ExportDocument[];
+  auditLogs: AuditLogEntry[];
+  testimonials: CustomerTestimonial[];
+  landingContent: LandingPageContent;
+  approvalHandlers: ApprovalActionHandlers;
+  onCreateTask: (input: Omit<TeamTask, 'id' | 'createdAt' | 'updatedAt'>) => Promise<void>;
+  onUpdateTaskDetails: (
+    id: string,
+    updates: Partial<
+      Pick<
+        TeamTask,
+        'title' | 'description' | 'department' | 'assignedToName' | 'priority' | 'status' | 'dueDate'
+      >
+    >
+  ) => Promise<void>;
+  onRefreshDashboard: () => Promise<void>;
+  onRefreshFx: () => Promise<void>;
+  onRefreshAis: () => Promise<void>;
+  onNavigateSection: (section: string, opts?: { filter?: string; search?: string }) => void;
+  onQuickAction: (actionId: string) => void;
   onGenerateDailyAiReport: () => void;
   onDownloadBackup: () => void;
 }
 
-const PIPELINE_STAGES: Array<{
-  key: string;
-  label: string;
-  color: string;
-  barColor: string;
-}> = [
-  { key: 'sourcing', label: 'Sourcing', color: 'text-sky-600 dark:text-sky-400', barColor: 'bg-sky-500' },
-  { key: 'purchased', label: 'Purchased', color: 'text-indigo-600 dark:text-indigo-400', barColor: 'bg-indigo-500' },
-  { key: 'inspection', label: 'Inspection', color: 'text-amber-600 dark:text-amber-400', barColor: 'bg-amber-500' },
-  { key: 'shipping', label: 'Shipping', color: 'text-blue-600 dark:text-blue-400', barColor: 'bg-blue-600' },
-  { key: 'delivered', label: 'Delivered', color: 'text-emerald-600 dark:text-emerald-400', barColor: 'bg-emerald-500' },
-];
+function MiniSparkline({ data, tone }: { data: number[]; tone?: KpiMetricItem['tone'] }) {
+  if (!data || data.length < 2 || data.every((v) => v === 0)) return null;
+  const max = Math.max(...data, 1);
+  const min = Math.min(...data, 0);
+  const span = Math.max(1, max - min);
+  const points = data
+    .map((v, i) => {
+      const x = (i / (data.length - 1)) * 64;
+      const y = 20 - ((v - min) / span) * 18;
+      return `${x.toFixed(1)},${y.toFixed(1)}`;
+    })
+    .join(' ');
+  const stroke =
+    tone === 'rose'
+      ? '#f43f5e'
+      : tone === 'amber'
+      ? '#d97706'
+      : tone === 'indigo'
+      ? '#6366f1'
+      : tone === 'sky'
+      ? '#0ea5e9'
+      : '#10b981';
+
+  return (
+    <svg width="64" height="22" viewBox="0 0 64 22" className="shrink-0 overflow-visible">
+      <polyline fill="none" stroke={stroke} strokeWidth="2" strokeLinecap="round" points={points} />
+    </svg>
+  );
+}
 
 export function ExecutiveDashboardPanel({
   role,
   staffProfile,
-  currency,
+  currency: defaultCurrency,
   fxRates,
+  settings,
+  liveFx,
+  aisStatus,
+  integrationConfig,
+  isLiveFirestoreMode,
   vehicles,
   users,
   sourcingRequests,
@@ -101,883 +224,833 @@ export function ExecutiveDashboardPanel({
   hrEmployees,
   leaveRequests,
   teamTasks,
+  salesTargets,
+  vessels,
+  documents,
+  auditLogs,
+  testimonials,
+  landingContent,
+  approvalHandlers,
+  onCreateTask,
+  onUpdateTaskDetails,
+  onRefreshDashboard,
+  onRefreshFx,
+  onRefreshAis,
   onNavigateSection,
-  onGenerateDailyAiReport,
-  onDownloadBackup,
+  onQuickAction,
 }: ExecutiveDashboardPanelProps) {
-  const fmt = (usd: number) => formatMoney(usd, currency, fxRates);
-
   const canSeeProfit = canViewCompanyProfit(role, staffProfile);
-  const canSeeSalaries = canViewSalaries(role, staffProfile);
-  const canExportBackup =
+  const canSeeAccounts = hasModulePermission(role, staffProfile, 'accounts', 'view');
+  const canApproveAccounts = hasModulePermission(role, staffProfile, 'accounts', 'edit');
+  const canSeeHr = hasModulePermission(role, staffProfile, 'hr', 'view');
+  const canApproveHr = hasModulePermission(role, staffProfile, 'hr', 'approve');
+  const canApproveUsers = hasModulePermission(role, staffProfile, 'users', 'edit');
+  const canApproveCms = hasModulePermission(role, staffProfile, 'cms', 'edit');
+  const canConvertSales = hasModulePermission(role, staffProfile, 'orders', 'create');
+  const canViewAudit =
+    hasModulePermission(role, staffProfile, 'settings', 'view') ||
     role === 'admin' ||
-    role === 'management' ||
-    role === 'it' ||
-    hasModulePermission(role, staffProfile, 'settings', 'export');
-  const canUseAi = hasModulePermission(role, staffProfile, 'ai', 'view');
+    role === 'management';
+  const canManageIntegrations = hasModulePermission(role, staffProfile, 'settings', 'edit');
 
-  const dashMeta =
-    role !== 'visitor'
-      ? DEPARTMENT_DASHBOARD_META[role]
-      : {
-          dashboardTitle: 'Business Overview',
-          subtitle: 'Monitor your export operations in real time.',
-          primaryModules: [],
-        };
+  // Dashboard display currency (defaults to portal currency; supports JPY/USD/GBP/PKR & all configured)
+  const [dashCurrency, setDashCurrency] = useState<CurrencyCode>(defaultCurrency);
+  useEffect(() => {
+    setDashCurrency(defaultCurrency);
+  }, [defaultCurrency]);
 
-  const roleBadgeLabel = role !== 'visitor' ? ROLE_METADATA[role]?.label || role : 'Staff';
+  const availableCurrencies = useMemo(() => {
+    const priority = ['USD', 'JPY', 'GBP', 'PKR', 'EUR', 'AUD', 'CAD', 'AED', 'KES', 'ZAR', 'NZD'];
+    const allKeys = Object.keys(fxRates || {});
+    const set = new Set<string>([...priority.filter((c) => c === 'USD' || fxRates[c]), ...allKeys]);
+    return Array.from(set);
+  }, [fxRates]);
 
-  const metrics = useMemo(() => {
-    const orderRevenueUsd = orders
-      .filter((o) =>
-        [
-          'payment_received',
-          'vehicle_in_yard',
-          'export_docs_ready',
-          'shipment_booked',
-          'shipped',
-          'arrived_port',
-          'completed',
-        ].includes(o.milestone)
-      )
-      .reduce((acc, o) => acc + (o.totalCifUsd || 0), 0);
+  // Date Range Filter state
+  const [datePreset, setDatePreset] = useState<DateRangePreset>('this_month');
+  const [customStart, setCustomStart] = useState(() => {
+    const d = new Date();
+    d.setDate(1);
+    return d.toISOString().slice(0, 10);
+  });
+  const [customEnd, setCustomEnd] = useState(() => new Date().toISOString().slice(0, 10));
 
-    const paidFinanceRevenueUsd = financeRecords
-      .filter(
-        (r) =>
-          (r.type === 'payment' || r.type === 'invoice') &&
-          (r.status === 'paid' || r.status === 'reconciled')
-      )
-      .reduce((acc, r) => acc + (r.amountUsd || 0), 0);
+  const resolvedRange = useMemo(
+    () => resolveDateRange(datePreset, customStart, customEnd),
+    [datePreset, customStart, customEnd]
+  );
 
-    const totalRevenueUsd = Math.max(orderRevenueUsd, paidFinanceRevenueUsd);
+  // View Tab & KPI Group selector
+  const [viewTab, setViewTab] = useState<DashboardViewTab>('overview');
+  const [kpiGroup, setKpiGroup] = useState<KpiGroupKey>('financial');
 
-    const totalExpensesUsd = financeRecords
-      .filter((r) => r.type === 'expense')
-      .reduce((acc, r) => acc + (r.amountUsd || 0), 0);
+  // Refreshing & Export Menus
+  const [refreshing, setRefreshing] = useState(false);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [printReportOpen, setPrintReportOpen] = useState(false);
 
-    const estimatedOrderMarginUsd = orders
-      .filter(
-        (o) =>
-          o.milestone === 'completed' || o.milestone === 'shipped' || o.milestone === 'arrived_port'
-      )
-      .reduce(
-        (acc, o) =>
-          acc + Math.max(0, o.totalCifUsd - o.fobUsd - o.freightUsd - o.inspectionUsd - o.insuranceUsd),
-        0
+  // Per-User Layout Customization persisted in localStorage
+  const prefKey = `auzio_superadmin_layout_${staffProfile?.uid || 'default'}`;
+  const [customizeOpen, setCustomizeOpen] = useState(false);
+  const [compactMode, setCompactMode] = useState(false);
+  const [sectionOrder, setSectionOrder] = useState<DashboardSectionId[]>(() => {
+    try {
+      const saved = localStorage.getItem(prefKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as { order?: DashboardSectionId[] };
+        if (Array.isArray(parsed.order) && parsed.order.length === DEFAULT_SECTION_ORDER.length) {
+          return parsed.order;
+        }
+      }
+    } catch {
+      // ignore
+    }
+    return DEFAULT_SECTION_ORDER;
+  });
+  const [hiddenSections, setHiddenSections] = useState<DashboardSectionId[]>(() => {
+    try {
+      const saved = localStorage.getItem(prefKey);
+      if (saved) {
+        const parsed = JSON.parse(saved) as { hidden?: DashboardSectionId[] };
+        if (Array.isArray(parsed.hidden)) return parsed.hidden;
+      }
+    } catch {
+      // ignore
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        prefKey,
+        JSON.stringify({ order: sectionOrder, hidden: hiddenSections, compactMode })
       );
-
-    const netProfitUsd =
-      totalExpensesUsd > 0 ? totalRevenueUsd - totalExpensesUsd : estimatedOrderMarginUsd;
-
-    const vehiclesSoldCount =
-      vehicles.filter((v) => v.status === 'sold').length +
-      orders.filter((o) =>
-        [
-          'vehicle_purchased',
-          'payment_received',
-          'vehicle_in_yard',
-          'export_docs_ready',
-          'shipment_booked',
-          'shipped',
-          'arrived_port',
-          'completed',
-        ].includes(o.milestone)
-      ).length;
-
-    const activeShipmentsCount = orders.filter((o) =>
-      ['vehicle_in_yard', 'export_docs_ready', 'shipment_booked', 'shipped'].includes(o.milestone)
-    ).length;
-
-    const activeCustomersCount = users.filter(
-      (u) => u.role === 'customer' || u.role === 'dealer'
-    ).length;
-
-    const pendingFinanceUsd = financeRecords
-      .filter((r) => r.type === 'invoice' && (r.status === 'pending' || r.status === 'overdue'))
-      .reduce((acc, r) => acc + (r.amountUsd || 0), 0);
-
-    const pendingOrderPaymentUsd = orders
-      .filter((o) => o.milestone === 'payment_pending' || o.milestone === 'vehicle_purchased')
-      .reduce((acc, o) => acc + (o.totalCifUsd || 0), 0);
-
-    const outstandingPaymentsUsd = pendingFinanceUsd + pendingOrderPaymentUsd;
-
-    const monthlyPayrollUsd = hrEmployees
-      .filter((e) => e.status === 'active')
-      .reduce((acc, e) => acc + (e.baseSalaryUsd || 0), 0);
-
-    return {
-      totalRevenueUsd,
-      totalExpensesUsd,
-      netProfitUsd,
-      vehiclesSoldCount,
-      activeShipmentsCount,
-      activeCustomersCount,
-      outstandingPaymentsUsd,
-      monthlyPayrollUsd,
-    };
-  }, [orders, financeRecords, vehicles, users, hrEmployees]);
-
-  const pipelineCounts = useMemo(() => {
-    const sourcing =
-      sourcingRequests.filter((r) => r.status !== 'closed').length +
-      orders.filter((o) =>
-        ['request_received', 'options_prepared', 'quotation_sent', 'customer_approved', 'bid_placed'].includes(
-          o.milestone
-        )
-      ).length;
-    const purchased = orders.filter((o) =>
-      ['vehicle_purchased', 'payment_pending', 'payment_received'].includes(o.milestone)
-    ).length;
-    const inspection = orders.filter((o) =>
-      ['vehicle_in_yard', 'export_docs_ready'].includes(o.milestone)
-    ).length;
-    const shipping = orders.filter((o) =>
-      ['shipment_booked', 'shipped'].includes(o.milestone)
-    ).length;
-    const delivered = orders.filter((o) =>
-      ['arrived_port', 'completed'].includes(o.milestone)
-    ).length;
-
-    const counts: Record<string, number> = {
-      sourcing,
-      purchased,
-      inspection,
-      shipping,
-      delivered,
-    };
-    const maxVal = Math.max(1, ...Object.values(counts));
-    return { counts, maxVal };
-  }, [sourcingRequests, orders]);
-
-  // Real chart data built strictly from existing orders & finance entries
-  const salesChartData = useMemo(() => {
-    const byDest = new Map<string, { label: string; revenue: number; orders: number }>();
-    for (const ord of orders) {
-      const key = (ord.destinationCountry || ord.destinationPortName || 'Export')
-        .split(',')[0]
-        .trim()
-        .slice(0, 16);
-      const curr = byDest.get(key) || { label: key, revenue: 0, orders: 0 };
-      curr.revenue += ord.totalCifUsd || 0;
-      curr.orders += 1;
-      byDest.set(key, curr);
+    } catch {
+      // ignore storage quota
     }
-    return Array.from(byDest.values())
-      .sort((a, b) => b.revenue - a.revenue)
-      .slice(0, 8);
-  }, [orders]);
+  }, [prefKey, sectionOrder, hiddenSections, compactMode]);
 
-  const financeFlowData = useMemo(() => {
-    if (!canSeeProfit) return [];
-    const byCat = new Map<string, { category: string; inflow: number; outflow: number }>();
-    for (const rec of financeRecords) {
-      const cat = rec.category.slice(0, 14) || 'General';
-      const curr = byCat.get(cat) || { category: cat, inflow: 0, outflow: 0 };
-      if (rec.type === 'expense') curr.outflow += rec.amountUsd;
-      else curr.inflow += rec.amountUsd;
-      byCat.set(cat, curr);
+  const moveSection = (id: DashboardSectionId, dir: -1 | 1) => {
+    setSectionOrder((prev) => {
+      const idx = prev.indexOf(id);
+      const nextIdx = idx + dir;
+      if (idx < 0 || nextIdx < 0 || nextIdx >= prev.length) return prev;
+      const copy = [...prev];
+      const [item] = copy.splice(idx, 1);
+      copy.splice(nextIdx, 0, item);
+      return copy;
+    });
+  };
+
+  const toggleSectionVisibility = (id: DashboardSectionId) => {
+    setHiddenSections((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    );
+  };
+
+  const resetLayout = () => {
+    setSectionOrder(DEFAULT_SECTION_ORDER);
+    setHiddenSections([]);
+    setCompactMode(false);
+  };
+
+  // Compute all real-time analytics from live Firestore collections
+  const analytics = useMemo(
+    () =>
+      computeDashboardAnalytics({
+        range: resolvedRange,
+        currency: dashCurrency,
+        fxRates,
+        canSeeProfit,
+        canSeeAccounts,
+        canSeeHr,
+        vehicles,
+        users,
+        sourcingRequests,
+        quotations,
+        orders,
+        inquiries,
+        financeRecords,
+        hrEmployees,
+        leaveRequests,
+        teamTasks,
+        salesTargets,
+        vessels,
+        documents,
+      }),
+    [
+      resolvedRange,
+      dashCurrency,
+      fxRates,
+      canSeeProfit,
+      canSeeAccounts,
+      canSeeHr,
+      vehicles,
+      users,
+      sourcingRequests,
+      quotations,
+      orders,
+      inquiries,
+      financeRecords,
+      hrEmployees,
+      leaveRequests,
+      teamTasks,
+      salesTargets,
+      vessels,
+      documents,
+    ]
+  );
+
+  const handleRefresh = async () => {
+    setRefreshing(true);
+    try {
+      await onRefreshDashboard();
+    } finally {
+      setTimeout(() => setRefreshing(false), 300);
     }
-    return Array.from(byCat.values()).slice(0, 6);
-  }, [financeRecords, canSeeProfit]);
+  };
 
-  // Strictly permission-filtered operational alerts
-  const alerts = useMemo(() => {
-    const list: Array<{
-      id: string;
-      severity: 'warning' | 'info' | 'urgent';
-      title: string;
-      detail: string;
-      targetSection: string;
-    }> = [];
-
-    if (hasModulePermission(role, staffProfile, 'crm', 'view')) {
-      const newInquiries = inquiries.filter((i) => i.status === 'received').length;
-      if (newInquiries > 0) {
-        list.push({
-          id: 'new-inquiries',
-          severity: 'warning',
-          title: `${newInquiries} New Customer Inquir${newInquiries === 1 ? 'y' : 'ies'} Awaiting Follow-up`,
-          detail: 'Respond quickly to convert public stock & shipping quote leads.',
-          targetSection: 'crm',
-        });
-      }
+  const isSectionVisibleInView = (id: DashboardSectionId): boolean => {
+    if (hiddenSections.includes(id)) return false;
+    if (viewTab === 'all') return true;
+    if (viewTab === 'overview') {
+      return ['kpis', 'quick_actions', 'approvals', 'financial', 'recent_orders', 'ai_insights'].includes(id);
     }
+    if (viewTab === 'financial') return ['kpis', 'financial'].includes(id);
+    if (viewTab === 'sales_crm') return ['sales', 'crm_pipeline'].includes(id);
+    if (viewTab === 'operations') return ['recent_orders', 'logistics'].includes(id);
+    if (viewTab === 'approvals_tasks') return ['approvals', 'tasks', 'quick_actions'].includes(id);
+    if (viewTab === 'health_ai') return ['website', 'ai_insights', 'system_health', 'audit_logs'].includes(id);
+    return true;
+  };
 
-    if (hasModulePermission(role, staffProfile, 'sales', 'view')) {
-      const approvedQuotes = quotations.filter((q) => q.status === 'approved').length;
-      if (approvedQuotes > 0) {
-        list.push({
-          id: 'approved-quotes',
-          severity: 'info',
-          title: `${approvedQuotes} Approved Quotation${approvedQuotes === 1 ? '' : 's'} Ready for Order Conversion`,
-          detail: 'Customer Max Bid Ceilings are authorized and ready to open as export orders.',
-          targetSection: 'sales',
-        });
-      }
-    }
+  const kpiGroups: Array<{
+    key: Exclude<KpiGroupKey, 'all'>;
+    label: string;
+    icon: typeof DollarSign;
+    items: KpiMetricItem[];
+  }> = [
+    { key: 'financial', label: 'Financial', icon: DollarSign, items: analytics.financialKpis },
+    { key: 'sales', label: 'Sales', icon: TrendingUp, items: analytics.salesKpis },
+    { key: 'crm', label: 'CRM & Customers', icon: Users, items: analytics.crmKpis },
+    { key: 'inventory', label: 'Inventory & Auctions', icon: Car, items: analytics.inventoryKpis },
+    { key: 'logistics', label: 'Orders & Logistics', icon: Ship, items: analytics.logisticsKpis },
+    { key: 'hr', label: 'Human Resources', icon: Briefcase, items: analytics.hrKpis },
+  ];
 
-    if (canSeeProfit) {
-      const overdueInvoices = financeRecords.filter((r) => r.status === 'overdue').length;
-      if (overdueInvoices > 0) {
-        list.push({
-          id: 'overdue-inv',
-          severity: 'urgent',
-          title: `${overdueInvoices} Overdue Invoice${overdueInvoices === 1 ? '' : 's'} Require Collection`,
-          detail: 'Review Accounts & Finance to follow up on overdue settlements.',
-          targetSection: 'accounts',
-        });
-      }
-    }
+  const renderKpiCard = (item: KpiMetricItem) => {
+    const isPositive = item.deltaPct !== null && item.deltaPct > 0;
+    const isNegative = item.deltaPct !== null && item.deltaPct < 0;
+    return (
+      <button
+        key={item.id}
+        type="button"
+        onClick={() => onNavigateSection(item.targetSection, item.filterKey ? { filter: item.filterKey } : undefined)}
+        className={`text-left rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 hover:border-amber-500/70 dark:hover:border-amber-500/70 transition-colors cursor-pointer flex flex-col justify-between ${
+          compactMode ? 'p-3' : 'p-4'
+        }`}
+      >
+        <div className="flex items-start justify-between gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 leading-tight">
+            {item.label}
+          </span>
+          {item.restricted && <Lock className="w-3.5 h-3.5 text-slate-400 shrink-0" />}
+        </div>
 
-    if (hasModulePermission(role, staffProfile, 'hr', 'view')) {
-      const pendingLeaves = leaveRequests.filter((l) => l.status === 'pending').length;
-      if (pendingLeaves > 0) {
-        list.push({
-          id: 'pending-leaves',
-          severity: 'info',
-          title: `${pendingLeaves} Pending Employee Leave Request${pendingLeaves === 1 ? '' : 's'}`,
-          detail: 'Review and approve or decline staff leave requests in HR.',
-          targetSection: 'hr',
-        });
-      }
-    }
+        <div className="flex items-end justify-between gap-2 mt-2">
+          <div className="min-w-0">
+            {refreshing ? (
+              <div className="h-6 w-24 rounded bg-slate-200 dark:bg-slate-800 animate-pulse" />
+            ) : (
+              <div
+                className={`font-bold tabular-nums tracking-tight truncate ${
+                  compactMode ? 'text-lg' : 'text-xl'
+                } ${
+                  item.restricted
+                    ? 'text-slate-400 text-sm'
+                    : item.tone === 'rose'
+                    ? 'text-rose-600 dark:text-rose-400'
+                    : item.tone === 'emerald'
+                    ? 'text-emerald-700 dark:text-emerald-400'
+                    : item.tone === 'amber'
+                    ? 'text-amber-600 dark:text-amber-400'
+                    : 'text-slate-950 dark:text-white'
+                }`}
+              >
+                {item.formattedValue}
+              </div>
+            )}
+            <div className="mt-1 flex items-center gap-1.5 text-[11px]">
+              {item.deltaPct !== null ? (
+                <span
+                  className={`inline-flex items-center font-semibold tabular-nums ${
+                    isPositive
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : isNegative
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-slate-500'
+                  }`}
+                >
+                  {isPositive ? (
+                    <ArrowUpRight className="w-3 h-3" />
+                  ) : isNegative ? (
+                    <ArrowDownRight className="w-3 h-3" />
+                  ) : null}
+                  {isPositive ? '+' : ''}
+                  {item.deltaPct}% vs {resolvedRange.prevLabel}
+                </span>
+              ) : (
+                <span className="text-slate-400 truncate">
+                  {item.deltaHint || resolvedRange.label}
+                </span>
+              )}
+            </div>
+          </div>
+          <MiniSparkline data={item.sparkline} tone={item.tone} />
+        </div>
+      </button>
+    );
+  };
 
-    if (hasModulePermission(role, staffProfile, 'reports', 'view')) {
-      const openUrgentTasks = teamTasks.filter(
-        (t) => t.status !== 'done' && (t.priority === 'urgent' || t.priority === 'high')
-      ).length;
-      if (openUrgentTasks > 0) {
-        list.push({
-          id: 'urgent-tasks',
-          severity: 'warning',
-          title: `${openUrgentTasks} High-Priority Team Task${openUrgentTasks === 1 ? '' : 's'} Open`,
-          detail: 'Check Reports & Tasks to keep operations on schedule.',
-          targetSection: 'reports',
-        });
-      }
-    }
+  const renderOrderedSection = (id: DashboardSectionId) => {
+    if (!isSectionVisibleInView(id)) return null;
 
-    return list;
-  }, [role, staffProfile, canSeeProfit, inquiries, quotations, financeRecords, leaveRequests, teamTasks]);
+    if (id === 'kpis') {
+      const visibleGroups =
+        kpiGroup === 'all' ? kpiGroups : kpiGroups.filter((g) => g.key === kpiGroup);
+      return (
+        <section key={id} className="space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-1.5">
+              {kpiGroups.map((g) => {
+                const Icon = g.icon;
+                return (
+                  <button
+                    key={g.key}
+                    type="button"
+                    onClick={() => setKpiGroup(g.key)}
+                    className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer transition-colors ${
+                      kpiGroup === g.key
+                        ? 'bg-slate-950 text-white dark:bg-amber-500 dark:text-slate-950'
+                        : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+                    }`}
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    {g.label}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setKpiGroup(kpiGroup === 'all' ? 'financial' : 'all')}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer ${
+                  kpiGroup === 'all'
+                    ? 'bg-amber-600 text-white'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                }`}
+              >
+                <LayoutGrid className="w-3.5 h-3.5" />
+                {kpiGroup === 'all' ? 'Showing All 6 Groups' : 'View All 6 KPI Groups'}
+              </button>
+            </div>
+            <span className="text-[11px] font-mono text-slate-500">
+              Period: {resolvedRange.label} · Comparing vs {resolvedRange.prevLabel}
+            </span>
+          </div>
 
-  // Role-tailored KPI cards respecting the Permission Matrix strictly
-  const kpiCards = useMemo(() => {
-    if (canSeeProfit) {
-      return [
-        {
-          label: 'Total Revenue',
-          value: fmt(metrics.totalRevenueUsd),
-          sub: `${orders.length} active export orders`,
-          icon: TrendingUp,
-          accent: 'text-emerald-600 dark:text-emerald-400',
-          section: 'accounts',
-        },
-        {
-          label: 'Net Profit (Restricted)',
-          value: fmt(metrics.netProfitUsd),
-          sub:
-            metrics.totalExpensesUsd > 0
-              ? `After ${fmt(metrics.totalExpensesUsd)} expenses`
-              : 'From recorded ledger & orders',
-          icon: BarChart3,
-          accent: 'text-blue-600 dark:text-blue-400',
-          section: 'accounts',
-        },
-        {
-          label: 'Vehicles Sold',
-          value: metrics.vehiclesSoldCount.toLocaleString(),
-          sub: `${vehicles.filter((v) => v.status === 'available').length} currently in stock`,
-          icon: Car,
-          accent: 'text-slate-900 dark:text-white',
-          section: 'inventory',
-        },
-        {
-          label: 'Active Shipments',
-          value: metrics.activeShipmentsCount.toLocaleString(),
-          sub: 'Yard, docs, booked & at sea',
-          icon: Ship,
-          accent: 'text-amber-600 dark:text-amber-400',
-          section: 'logistics',
-        },
-        {
-          label: 'Active Customers',
-          value: metrics.activeCustomersCount.toLocaleString(),
-          sub: `${inquiries.length} recorded inquiries`,
-          icon: Users,
-          accent: 'text-indigo-600 dark:text-indigo-400',
-          section: 'crm',
-        },
-        {
-          label: 'Outstanding Payments',
-          value: fmt(metrics.outstandingPaymentsUsd),
-          sub: 'Pending invoices & settlements',
-          icon: CreditCard,
-          accent:
-            metrics.outstandingPaymentsUsd > 0
-              ? 'text-rose-600 dark:text-rose-400'
-              : 'text-slate-700 dark:text-slate-300',
-          section: 'accounts',
-        },
-      ];
+          <div className="space-y-5">
+            {visibleGroups.map((g) => (
+              <div key={g.key} className="space-y-2.5">
+                {kpiGroup === 'all' && (
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                    {g.label} Overview
+                  </h4>
+                )}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-3">
+                  {g.items.map(renderKpiCard)}
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      );
     }
 
-    if (role === 'hr') {
-      const activeEmp = hrEmployees.filter((e) => e.status === 'active').length;
-      const pendingLeaves = leaveRequests.filter((l) => l.status === 'pending').length;
-      const openTasks = teamTasks.filter((t) => t.status !== 'done').length;
-      const staffAccounts = users.filter((u) => ROLE_METADATA[u.role]?.isStaff).length;
-      return [
-        {
-          label: 'Employee Directory',
-          value: hrEmployees.length.toLocaleString(),
-          sub: `${activeEmp} active employees`,
-          icon: Briefcase,
-          accent: 'text-blue-600 dark:text-blue-400',
-          section: 'hr',
-        },
-        {
-          label: 'Pending Leave Approvals',
-          value: pendingLeaves.toLocaleString(),
-          sub: `${leaveRequests.length} total leave requests`,
-          icon: Calendar,
-          accent: 'text-amber-600 dark:text-amber-400',
-          section: 'hr',
-        },
-        ...(canSeeSalaries
-          ? [
-              {
-                label: 'Monthly Base Payroll',
-                value: fmt(metrics.monthlyPayrollUsd),
-                sub: 'Active staff base salaries',
-                icon: CreditCard,
-                accent: 'text-emerald-600 dark:text-emerald-400',
-                section: 'hr',
-              },
-            ]
-          : []),
-        {
-          label: 'Active Staff Accounts',
-          value: staffAccounts.toLocaleString(),
-          sub: 'Provisioned internal users',
-          icon: Users,
-          accent: 'text-indigo-600 dark:text-indigo-400',
-          section: 'users',
-        },
-        {
-          label: 'Open HR & Team Tasks',
-          value: openTasks.toLocaleString(),
-          sub: `${teamTasks.length} total assigned tasks`,
-          icon: ClipboardList,
-          accent: 'text-slate-700 dark:text-slate-300',
-          section: 'reports',
-        },
-      ];
+    if (id === 'quick_actions' || id === 'approvals' || id === 'tasks') {
+      return (
+        <DashboardApprovalsTasks
+          key={id}
+          staffProfile={staffProfile}
+          currency={dashCurrency}
+          fxRates={fxRates}
+          canApproveAccounts={canApproveAccounts}
+          canApproveHr={canApproveHr}
+          canApproveUsers={canApproveUsers}
+          canApproveCms={canApproveCms}
+          canConvertSales={canConvertSales}
+          financeRecords={financeRecords}
+          leaveRequests={leaveRequests}
+          users={users}
+          quotations={quotations}
+          sourcingRequests={sourcingRequests}
+          orders={orders}
+          testimonials={testimonials}
+          teamTasks={teamTasks}
+          hrEmployees={hrEmployees}
+          showQuickActions={id === 'quick_actions'}
+          showApprovals={id === 'approvals'}
+          showTasks={id === 'tasks'}
+          approvalHandlers={approvalHandlers}
+          onCreateTask={onCreateTask}
+          onUpdateTaskDetails={onUpdateTaskDetails}
+          onQuickAction={onQuickAction}
+          onNavigateSection={(sec) => onNavigateSection(sec)}
+        />
+      );
     }
 
-    if (role === 'operations') {
-      const yardQueue = orders.filter((o) =>
-        ['vehicle_in_yard', 'export_docs_ready'].includes(o.milestone)
-      ).length;
-      return [
-        {
-          label: 'Available Yard Stock',
-          value: vehicles.filter((v) => v.status === 'available').length.toLocaleString(),
-          sub: `${vehicles.length} total catalog vehicles`,
-          icon: Car,
-          accent: 'text-slate-900 dark:text-white',
-          section: 'inventory',
-        },
-        {
-          label: 'Open Auction Requests',
-          value: sourcingRequests.filter((r) => r.status !== 'closed').length.toLocaleString(),
-          sub: 'Awaiting lot shortlisting / bids',
-          icon: Gavel,
-          accent: 'text-indigo-600 dark:text-indigo-400',
-          section: 'auctions',
-        },
-        {
-          label: 'Inspection & Export Docs',
-          value: yardQueue.toLocaleString(),
-          sub: 'JEVIC / QISJ & export clearance',
-          icon: FileText,
-          accent: 'text-amber-600 dark:text-amber-400',
-          section: 'logistics',
-        },
-        {
-          label: 'Active Shipments',
-          value: metrics.activeShipmentsCount.toLocaleString(),
-          sub: 'Booked & on water',
-          icon: Ship,
-          accent: 'text-blue-600 dark:text-blue-400',
-          section: 'logistics',
-        },
-        {
-          label: 'Delivered Orders',
-          value: (pipelineCounts.counts.delivered || 0).toLocaleString(),
-          sub: 'Arrived port or completed',
-          icon: CheckCircle2,
-          accent: 'text-emerald-600 dark:text-emerald-400',
-          section: 'orders',
-        },
-        {
-          label: 'Open Team Tasks',
-          value: teamTasks.filter((t) => t.status !== 'done').length.toLocaleString(),
-          sub: 'Operational action items',
-          icon: ClipboardList,
-          accent: 'text-slate-700 dark:text-slate-300',
-          section: 'reports',
-        },
-      ];
+    if (id === 'financial' || id === 'sales' || id === 'crm_pipeline') {
+      return (
+        <DashboardFinancialSales
+          key={id}
+          analytics={analytics}
+          orders={orders}
+          currency={dashCurrency}
+          fxRates={fxRates}
+          canSeeProfit={canSeeProfit}
+          canSeeAccounts={canSeeAccounts}
+          showFinancial={id === 'financial'}
+          showSales={id === 'sales'}
+          showCrmPipeline={id === 'crm_pipeline'}
+          onNavigateSection={onNavigateSection}
+        />
+      );
     }
 
-    if (role === 'it') {
-      const suspendedCount = users.filter((u) => u.accountStatus === 'suspended').length;
-      const staffCount = users.filter((u) => ROLE_METADATA[u.role]?.isStaff).length;
-      return [
-        {
-          label: 'Total User Accounts',
-          value: users.length.toLocaleString(),
-          sub: `${staffCount} staff · ${metrics.activeCustomersCount} buyers`,
-          icon: Users,
-          accent: 'text-blue-600 dark:text-blue-400',
-          section: 'users',
-        },
-        {
-          label: 'Suspended Accounts',
-          value: suspendedCount.toLocaleString(),
-          sub: 'Revoked at Firestore rules layer',
-          icon: ShieldCheck,
-          accent: suspendedCount > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400',
-          section: 'users',
-        },
-        {
-          label: 'Published Vehicles',
-          value: vehicles.length.toLocaleString(),
-          sub: 'Live website catalog',
-          icon: Car,
-          accent: 'text-amber-600 dark:text-amber-400',
-          section: 'inventory',
-        },
-        {
-          label: 'Open System Tasks',
-          value: teamTasks.filter((t) => t.status !== 'done').length.toLocaleString(),
-          sub: 'Development & maintenance',
-          icon: ClipboardList,
-          accent: 'text-indigo-600 dark:text-indigo-400',
-          section: 'reports',
-        },
-      ];
+    if (id === 'recent_orders' || id === 'logistics') {
+      return (
+        <DashboardOperationsPanel
+          key={id}
+          analytics={analytics}
+          orders={orders}
+          vehicles={vehicles}
+          users={users}
+          quotations={quotations}
+          financeRecords={financeRecords}
+          vessels={vessels}
+          aisStatus={aisStatus}
+          currency={dashCurrency}
+          fxRates={fxRates}
+          showRecentOrders={id === 'recent_orders'}
+          showLogistics={id === 'logistics'}
+          onRefreshAis={onRefreshAis}
+          onNavigateSection={onNavigateSection}
+        />
+      );
     }
 
-    // Sales & Sales Manager KPIs (strictly NO Company Profit or Salaries)
-    const openLeads = inquiries.filter((i) => i.status === 'received').length;
-    const approvedQuotes = quotations.filter((q) => q.status === 'approved').length;
-    return [
-      {
-        label: 'New Buyer Leads',
-        value: openLeads.toLocaleString(),
-        sub: `${inquiries.length} total recorded inquiries`,
-        icon: Users,
-        accent: 'text-amber-600 dark:text-amber-400',
-        section: 'crm',
-      },
-      {
-        label: 'Quotations Issued',
-        value: quotations.length.toLocaleString(),
-        sub: `${approvedQuotes} customer-approved`,
-        icon: FileText,
-        accent: 'text-blue-600 dark:text-blue-400',
-        section: 'sales',
-      },
-      {
-        label: 'Active Export Orders',
-        value: orders.length.toLocaleString(),
-        sub: `${metrics.activeShipmentsCount} in transit / yard`,
-        icon: Ship,
-        accent: 'text-emerald-600 dark:text-emerald-400',
-        section: 'orders',
-      },
-      {
-        label: 'Available Stock',
-        value: vehicles.filter((v) => v.status === 'available').length.toLocaleString(),
-        sub: 'Ready for immediate CIF quote',
-        icon: Car,
-        accent: 'text-slate-900 dark:text-white',
-        section: 'inventory',
-      },
-      {
-        label: 'Registered Buyers',
-        value: metrics.activeCustomersCount.toLocaleString(),
-        sub: 'Customers & wholesale dealers',
-        icon: TrendingUp,
-        accent: 'text-indigo-600 dark:text-indigo-400',
-        section: 'crm',
-      },
-      {
-        label: 'Open Sourcing Requests',
-        value: sourcingRequests.filter((r) => r.status !== 'closed').length.toLocaleString(),
-        sub: 'Auction sourcing queue',
-        icon: Gavel,
-        accent: 'text-sky-600 dark:text-sky-400',
-        section: 'auctions',
-      },
-    ];
-  }, [
-    canSeeProfit,
-    canSeeSalaries,
-    role,
-    metrics,
-    orders.length,
-    vehicles,
-    inquiries,
-    quotations,
-    sourcingRequests,
-    hrEmployees,
-    leaveRequests,
-    teamTasks,
-    users,
-    pipelineCounts.counts.delivered,
-    currency,
-    fxRates,
-  ]);
+    return (
+      <DashboardHealthInsights
+        key={id}
+        analytics={analytics}
+        range={resolvedRange}
+        currency={dashCurrency}
+        isLiveFirestoreMode={isLiveFirestoreMode}
+        liveFx={liveFx}
+        aisStatus={aisStatus}
+        integrationConfig={integrationConfig}
+        vehicles={vehicles}
+        users={users}
+        inquiries={inquiries}
+        testimonials={testimonials}
+        landingContent={landingContent}
+        auditLogs={auditLogs}
+        canViewAudit={canViewAudit}
+        canManageIntegrations={canManageIntegrations}
+        showWebsite={id === 'website'}
+        showAiInsights={id === 'ai_insights'}
+        showHealth={id === 'system_health'}
+        showAuditLogs={id === 'audit_logs'}
+        onRefreshFx={onRefreshFx}
+        onRefreshAis={onRefreshAis}
+        onNavigateSection={(sec) => onNavigateSection(sec)}
+      />
+    );
+  };
 
-  const showSalesAndPipeline =
-    canSeeProfit ||
-    role === 'sales' ||
-    role === 'sales_manager' ||
-    role === 'operations';
+  const roleMeta = ROLE_METADATA[role === 'visitor' ? 'sales' : role];
 
   return (
     <div className="space-y-6">
-      {/* Role-Tailored Header + Quick Actions */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <div className="flex flex-wrap items-center gap-2 mb-1">
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-md bg-slate-900 dark:bg-amber-500/20 text-white dark:text-amber-300 text-[11px] font-bold uppercase tracking-wider">
-              <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
-              {roleBadgeLabel}
-            </span>
-            {staffProfile?.department && (
-              <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                {staffProfile.department}
-                {staffProfile.employeeCode ? ` · ${staffProfile.employeeCode}` : ''}
+      {/* ===================================================================== */}
+      {/* SUPER ADMIN COMMAND CENTER HEADER & CONTROLS */}
+      {/* ===================================================================== */}
+      <div className="bg-slate-950 text-white rounded-2xl p-5 sm:p-6 border border-slate-800 space-y-5">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div>
+            <div className="flex flex-wrap items-center gap-2 text-xs text-amber-400 font-semibold uppercase tracking-wider">
+              <span>{roleMeta?.label || 'Super Admin'} Command Center</span>
+              <span className="text-slate-600">·</span>
+              <span className="text-slate-300 font-mono">
+                {isLiveFirestoreMode ? 'Cloud Firestore Connected' : 'Local Mode'}
               </span>
-            )}
+            </div>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight mt-1">
+              Welcome back, {staffProfile?.displayName || 'Administrator'}
+            </h2>
+            <p className="text-xs sm:text-sm text-slate-400 mt-1">
+              Real-time company telemetry across Finance, Sales, CRM, Auctions, Orders, Logistics, HR & System Health.
+            </p>
           </div>
-          <h2 className="text-2xl font-bold text-slate-900 dark:text-white tracking-tight">
-            {dashMeta.dashboardTitle}
-          </h2>
-          <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{dashMeta.subtitle}</p>
-        </div>
-        <div className="flex flex-wrap items-center gap-2.5">
-          {canUseAi && (
-            <button
-              type="button"
-              onClick={onGenerateDailyAiReport}
-              className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-slate-900 dark:bg-amber-500 text-white dark:text-slate-950 text-xs font-semibold hover:bg-slate-800 dark:hover:bg-amber-400 transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <Bot className="w-4 h-4" />
-              <span>Daily Business Report</span>
-            </button>
-          )}
-          {canExportBackup && (
-            <button
-              type="button"
-              onClick={onDownloadBackup}
-              className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 text-xs font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer whitespace-nowrap"
-            >
-              <Download className="w-4 h-4" />
-              <span>Export Snapshot</span>
-            </button>
-          )}
-        </div>
-      </div>
 
-      {/* Role-Scoped KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
-        {kpiCards.map((card) => {
-          const Icon = card.icon;
-          return (
-            <button
-              key={card.label}
-              type="button"
-              onClick={() => onNavigateSection(card.section)}
-              className="group text-left bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 hover:border-slate-300 dark:hover:border-slate-700 transition-colors cursor-pointer"
+          {/* Right Action Controls: Currency, Refresh, Export, Customize */}
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              aria-label="Dashboard Currency"
+              value={dashCurrency}
+              onChange={(e) => setDashCurrency(e.target.value)}
+              className="px-2.5 py-2 text-xs font-mono font-bold rounded-lg bg-slate-900 border border-slate-700 text-white cursor-pointer"
             >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-xs font-semibold text-slate-500 dark:text-slate-400">
-                  {card.label}
-                </span>
-                <Icon className={`w-4 h-4 ${card.accent}`} />
-              </div>
-              <div className="mt-2.5 text-2xl font-bold font-mono tabular-nums text-slate-950 dark:text-white tracking-tight">
-                {card.value}
-              </div>
-              <div className="mt-1.5 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                <span className="truncate">{card.sub}</span>
-                <ArrowUpRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
-              </div>
-            </button>
-          );
-        })}
-      </div>
+              {availableCurrencies.map((c) => (
+                <option key={c} value={c}>
+                  {c}
+                </option>
+              ))}
+            </select>
 
-      {/* Sales Performance Chart + Order Pipeline (only for authorized trade/exec roles) */}
-      {showSalesAndPipeline && (
-        <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-          <div className="xl:col-span-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
-            <div className="flex items-center justify-between gap-3 mb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Sales Volume by Destination Market
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Real CIF order value aggregated across export markets (USD base)
-                </p>
-              </div>
-              {hasModulePermission(role, staffProfile, 'sales', 'view') && (
-                <button
-                  type="button"
-                  onClick={() => onNavigateSection('sales')}
-                  className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer whitespace-nowrap"
-                >
-                  View Sales &rarr;
-                </button>
+            <button
+              type="button"
+              onClick={() => void handleRefresh()}
+              disabled={refreshing}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-100 cursor-pointer"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
+              Refresh
+            </button>
+
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setExportMenuOpen((o) => !o)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg bg-amber-500 hover:bg-amber-400 text-slate-950 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                Export Report
+              </button>
+              {exportMenuOpen && (
+                <div className="absolute right-0 top-full mt-2 w-56 bg-white dark:bg-slate-900 text-slate-900 dark:text-white border border-slate-200 dark:border-slate-700 rounded-xl shadow-2xl z-40 overflow-hidden text-xs">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadDashboardCsv({
+                        companySettings: settings,
+                        adminName: staffProfile?.displayName || 'Administrator',
+                        range: resolvedRange,
+                        currency: dashCurrency,
+                        analytics,
+                      });
+                      setExportMenuOpen(false);
+                    }}
+                    className="w-full px-3.5 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2 cursor-pointer"
+                  >
+                    <FileText className="w-4 h-4 text-slate-500" />
+                    Export CSV Spreadsheet
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      downloadDashboardExcel({
+                        companySettings: settings,
+                        adminName: staffProfile?.displayName || 'Administrator',
+                        range: resolvedRange,
+                        currency: dashCurrency,
+                        analytics,
+                      });
+                      setExportMenuOpen(false);
+                    }}
+                    className="w-full px-3.5 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2 cursor-pointer"
+                  >
+                    <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+                    Export Excel (.xls)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setExportMenuOpen(false);
+                      setPrintReportOpen(true);
+                    }}
+                    className="w-full px-3.5 py-2.5 text-left hover:bg-slate-50 dark:hover:bg-slate-800 flex items-center gap-2 cursor-pointer border-t border-slate-100 dark:border-slate-800"
+                  >
+                    <Printer className="w-4 h-4 text-amber-600" />
+                    Printable / PDF Executive Report
+                  </button>
+                </div>
               )}
             </div>
 
-            {salesChartData.length === 0 ? (
-              <div className="h-64 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-lg p-6">
-                <BarChart3 className="w-8 h-8 text-slate-300 dark:text-slate-700 mb-2" />
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  No export orders recorded yet
-                </p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-sm">
-                  Once customer quotations are converted into export orders, sales volume by
-                  destination market will plot automatically here.
-                </p>
-              </div>
-            ) : (
-              <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={salesChartData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="auzioRevGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor="#d97706" stopOpacity={0.32} />
-                        <stop offset="95%" stopColor="#d97706" stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.4} />
-                    <XAxis dataKey="label" tick={{ fontSize: 11 }} stroke="#64748b" />
-                    <YAxis
-                      tick={{ fontSize: 11 }}
-                      stroke="#64748b"
-                      tickFormatter={(v) => `$${Math.round(Number(v) / 1000)}k`}
-                    />
-                    <Tooltip
-                      formatter={(val: unknown) => [
-                        `$${Number(val || 0).toLocaleString()} USD`,
-                        'Order Value',
-                      ]}
-                      contentStyle={{
-                        borderRadius: '8px',
-                        border: '1px solid #cbd5e1',
-                        fontSize: '12px',
-                      }}
-                    />
-                    <Area
-                      type="monotone"
-                      dataKey="revenue"
-                      stroke="#d97706"
-                      strokeWidth={2.5}
-                      fillOpacity={1}
-                      fill="url(#auzioRevGrad)"
-                    />
-                  </AreaChart>
-                </ResponsiveContainer>
-              </div>
-            )}
+            <button
+              type="button"
+              onClick={() => setCustomizeOpen((o) => !o)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-lg bg-slate-900 border border-slate-700 hover:bg-slate-800 text-slate-100 cursor-pointer"
+            >
+              <SlidersHorizontal className="w-3.5 h-3.5" />
+              Customize
+            </button>
+          </div>
+        </div>
+
+        {/* Date Range Filter Row */}
+        <div className="flex flex-wrap items-center justify-between gap-3 pt-4 border-t border-slate-800">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Calendar className="w-3.5 h-3.5 text-amber-400 mr-1" />
+            {(
+              [
+                ['today', 'Today'],
+                ['yesterday', 'Yesterday'],
+                ['this_week', 'This Week'],
+                ['this_month', 'This Month'],
+                ['last_month', 'Last Month'],
+                ['this_quarter', 'This Quarter'],
+                ['this_year', 'This Year'],
+                ['custom', 'Custom Range'],
+              ] as const
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setDatePreset(key)}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+                  datePreset === key
+                    ? 'bg-amber-500 text-slate-950'
+                    : 'bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
 
-          {/* Order Pipeline */}
-          <div className="xl:col-span-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 flex flex-col justify-between">
+          {datePreset === 'custom' && (
+            <div className="flex items-center gap-2 text-xs">
+              <input
+                type="date"
+                value={customStart}
+                onChange={(e) => setCustomStart(e.target.value)}
+                className="px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white font-mono"
+              />
+              <span className="text-slate-400">to</span>
+              <input
+                type="date"
+                value={customEnd}
+                onChange={(e) => setCustomEnd(e.target.value)}
+                className="px-2 py-1 rounded bg-slate-900 border border-slate-700 text-white font-mono"
+              />
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ===================================================================== */}
+      {/* EXECUTIVE WORKSPACE VIEW TABS */}
+      {/* ===================================================================== */}
+      <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 dark:border-slate-800 pb-3">
+        {(
+          [
+            ['overview', 'Command Overview', LayoutGrid],
+            ['financial', 'Financial Intelligence', DollarSign],
+            ['sales_crm', 'Sales & CRM Pipeline', BarChart3],
+            ['operations', 'Orders & Logistics Map', Ship],
+            ['approvals_tasks', 'Approvals & Tasks', ClipboardCheck],
+            ['health_ai', 'Website, AI & System Health', Activity],
+            ['all', 'All Sections', Globe],
+          ] as const
+        ).map(([id, label, Icon]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setViewTab(id)}
+            className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold cursor-pointer transition-colors ${
+              viewTab === id
+                ? 'bg-slate-950 text-white dark:bg-amber-500 dark:text-slate-950'
+                : 'text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
+            }`}
+          >
+            <Icon className="w-3.5 h-3.5" />
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {/* ===================================================================== */}
+      {/* WIDGET CUSTOMIZATION PANEL */}
+      {/* ===================================================================== */}
+      {customizeOpen && (
+        <div className="bg-white dark:bg-slate-900 border border-amber-400/60 dark:border-amber-600/50 rounded-2xl p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <div className="flex items-center justify-between gap-2 mb-5">
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    Order Pipeline
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Live cross-department distribution
-                  </p>
-                </div>
-                {hasModulePermission(role, staffProfile, 'orders', 'view') && (
-                  <button
-                    type="button"
-                    onClick={() => onNavigateSection('orders')}
-                    className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
+              <h4 className="text-sm font-bold text-slate-950 dark:text-white">
+                Customize Dashboard Layout & Widget Order
+              </h4>
+              <p className="text-xs text-slate-500">
+                Preferences save automatically for {staffProfile?.displayName || 'your account'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 text-xs">
+              <label className="inline-flex items-center gap-1.5 cursor-pointer text-slate-700 dark:text-slate-300 font-semibold">
+                <input
+                  type="checkbox"
+                  checked={compactMode}
+                  onChange={(e) => setCompactMode(e.target.checked)}
+                />
+                Compact KPI Density
+              </label>
+              <button
+                type="button"
+                onClick={resetLayout}
+                className="px-2.5 py-1 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-semibold cursor-pointer"
+              >
+                Reset Default
+              </button>
+              <button
+                type="button"
+                onClick={() => setCustomizeOpen(false)}
+                className="p-1 text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {sectionOrder.map((secId, index) => {
+              const hidden = hiddenSections.includes(secId);
+              return (
+                <div
+                  key={secId}
+                  className="flex items-center justify-between gap-2 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 text-xs"
+                >
+                  <span
+                    className={`font-semibold truncate ${
+                      hidden ? 'line-through text-slate-400' : 'text-slate-800 dark:text-slate-200'
+                    }`}
                   >
-                    All Orders
-                  </button>
-                )}
-              </div>
-
-              <div className="space-y-4">
-                {PIPELINE_STAGES.map((stage) => {
-                  const count = pipelineCounts.counts[stage.key] || 0;
-                  const pct = Math.max(
-                    count > 0 ? 8 : 0,
-                    Math.round((count / pipelineCounts.maxVal) * 100)
-                  );
-                  return (
-                    <div key={stage.key} className="space-y-1.5">
-                      <div className="flex items-center justify-between text-sm">
-                        <span className="font-medium text-slate-700 dark:text-slate-200">
-                          {stage.label}
-                        </span>
-                        <span className={`font-mono font-bold tabular-nums ${stage.color}`}>
-                          {count}
-                        </span>
-                      </div>
-                      <div className="h-2 rounded-full bg-slate-100 dark:bg-slate-800 overflow-hidden">
-                        <div
-                          className={`h-full rounded-full ${stage.barColor} transition-all duration-300`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-              <span>Total active pipeline</span>
-              <span className="font-mono font-bold text-slate-900 dark:text-white tabular-nums">
-                {Object.values(pipelineCounts.counts).reduce((a, b) => a + b, 0)} items
-              </span>
-            </div>
+                    {index + 1}. {SECTION_LABELS[secId]}
+                  </span>
+                  <div className="flex items-center gap-1 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => moveSection(secId, -1)}
+                      disabled={index === 0}
+                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 cursor-pointer"
+                      title="Move up"
+                    >
+                      <ArrowUp className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => moveSection(secId, 1)}
+                      disabled={index === sectionOrder.length - 1}
+                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 disabled:opacity-30 cursor-pointer"
+                      title="Move down"
+                    >
+                      <ArrowDown className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => toggleSectionVisibility(secId)}
+                      className="p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                      title={hidden ? 'Show widget' : 'Hide widget'}
+                    >
+                      {hidden ? (
+                        <EyeOff className="w-3.5 h-3.5 text-slate-400" />
+                      ) : (
+                        <Eye className="w-3.5 h-3.5 text-emerald-600" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}
 
-      {/* Bottom Row: Permission-Scoped Alerts & Profit/Cashflow (strictly hidden for non-authorized roles) */}
-      <div className="grid grid-cols-1 xl:grid-cols-12 gap-5">
-        <div
-          className={`${
-            canSeeProfit ? 'xl:col-span-6' : 'xl:col-span-12'
-          } bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5`}
-        >
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-base font-bold text-slate-900 dark:text-white">
-              Priority Alerts &amp; Department Approvals
-            </h3>
-            <span className="text-xs text-slate-500 dark:text-slate-400 tabular-nums">
-              {alerts.length} active
-            </span>
-          </div>
+      {/* ===================================================================== */}
+      {/* RENDER ALL ACTIVE SECTIONS IN CUSTOMIZED ORDER */}
+      {/* ===================================================================== */}
+      <div className="space-y-6">{sectionOrder.map(renderOrderedSection)}</div>
 
-          {alerts.length === 0 ? (
-            <div className="flex items-center gap-3 p-4 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/60 text-sm text-emerald-800 dark:text-emerald-300">
-              <CheckCircle2 className="w-5 h-5 shrink-0" />
-              <span>All operational queues and approvals in your department are up to date.</span>
-            </div>
-          ) : (
-            <div className="divide-y divide-slate-100 dark:divide-slate-800">
-              {alerts.map((alert) => (
-                <div key={alert.id} className="py-3 flex items-start justify-between gap-3">
-                  <div className="flex items-start gap-2.5 min-w-0">
-                    {alert.severity === 'urgent' ? (
-                      <AlertCircle className="w-4 h-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                    ) : (
-                      <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                    )}
-                    <div className="min-w-0">
-                      <div className="text-sm font-semibold text-slate-900 dark:text-white">
-                        {alert.title}
-                      </div>
-                      <div className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                        {alert.detail}
-                      </div>
-                    </div>
+      {/* ===================================================================== */}
+      {/* PRINTABLE / SAVE-AS-PDF EXECUTIVE REPORT MODAL (iFrame-Safe) */}
+      {/* ===================================================================== */}
+      {printReportOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs overflow-y-auto p-4 sm:p-8 flex justify-center">
+          <div className="bg-white text-slate-950 rounded-2xl max-w-4xl w-full p-6 sm:p-8 space-y-6 shadow-2xl h-fit">
+            <div className="flex items-start justify-between gap-4 border-b border-slate-200 pb-4">
+              <div className="flex items-center gap-3">
+                <img src={OFFICIAL_LOGO_URL} alt="Auzio Traders" className="h-10 w-auto object-contain" />
+                <div>
+                  <h3 className="text-lg font-bold text-slate-950">
+                    {settings.companyName || 'AUZIO TRADERS'} — Executive Dashboard Report
+                  </h3>
+                  <div className="text-xs text-slate-500">
+                    Date Range: <strong>{resolvedRange.label}</strong> · Currency:{' '}
+                    <strong>{dashCurrency}</strong> · Generated: {new Date().toLocaleString()} · By:{' '}
+                    {staffProfile?.displayName || 'Super Admin'}
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => onNavigateSection(alert.targetSection)}
-                    className="shrink-0 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:text-amber-600 dark:hover:text-amber-400 cursor-pointer"
-                  >
-                    Open &rarr;
-                  </button>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 no-print">
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold bg-slate-950 text-white rounded-lg cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Print / Save PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPrintReportOpen(false)}
+                  className="p-2 text-slate-500 hover:text-slate-900 cursor-pointer"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              {kpiGroups.map((g) => (
+                <div key={g.key} className="border border-slate-200 rounded-xl p-4 space-y-2">
+                  <div className="text-xs font-bold uppercase tracking-wider text-slate-700 border-b border-slate-100 pb-1.5">
+                    {g.label} Overview
+                  </div>
+                  <div className="space-y-1.5 text-xs">
+                    {g.items
+                      .filter((k) => !k.restricted)
+                      .map((k) => (
+                        <div key={k.id} className="flex items-center justify-between gap-2">
+                          <span className="text-slate-600">{k.label}</span>
+                          <span className="font-bold tabular-nums text-slate-950">
+                            {k.formattedValue}
+                          </span>
+                        </div>
+                      ))}
+                  </div>
                 </div>
               ))}
             </div>
-          )}
-        </div>
 
-        {/* Cash Flow Snapshot — STRICTLY visible only to Owner, Management, and Accounts */}
-        {canSeeProfit && (
-          <div className="xl:col-span-6 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                  Accounts Cash Flow Breakdown
-                </h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">
-                  Restricted to Owner, Management &amp; Accounts · Inflows vs. expenses
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => onNavigateSection('accounts')}
-                className="text-xs font-semibold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
-              >
-                Open Accounts &rarr;
-              </button>
+            <div className="flex items-center justify-between text-[11px] text-slate-500 border-t border-slate-200 pt-3">
+              <span className="inline-flex items-center gap-1">
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                Verified live Firestore telemetry · Confidential management document
+              </span>
+              <span>{settings.officeAddress}</span>
             </div>
-
-            {financeFlowData.length === 0 ? (
-              <div className="h-48 flex flex-col items-center justify-center text-center border border-dashed border-slate-200 dark:border-slate-800 rounded-lg p-5">
-                <Briefcase className="w-7 h-7 text-slate-300 dark:text-slate-700 mb-2" />
-                <p className="text-sm font-semibold text-slate-700 dark:text-slate-300">
-                  No ledger entries logged yet
-                </p>
-                <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                  Log invoices, payments, or expenses in Accounts &amp; Finance to populate P&amp;L
-                  cash flow charts.
-                </p>
-                <button
-                  type="button"
-                  onClick={() => onNavigateSection('accounts')}
-                  className="mt-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-800 text-white text-xs font-semibold cursor-pointer"
-                >
-                  <FileText className="w-3.5 h-3.5" />
-                  <span>Log First Entry</span>
-                </button>
-              </div>
-            ) : (
-              <div className="h-48 w-full">
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={financeFlowData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" opacity={0.4} />
-                    <XAxis dataKey="category" tick={{ fontSize: 11 }} stroke="#64748b" />
-                    <YAxis tick={{ fontSize: 11 }} stroke="#64748b" />
-                    <Tooltip />
-                    <Bar dataKey="inflow" name="Inflow (USD)" fill="#16a34a" radius={[4, 4, 0, 0]} />
-                    <Bar
-                      dataKey="outflow"
-                      name="Expense (USD)"
-                      fill="#dc2626"
-                      radius={[4, 4, 0, 0]}
-                    />
-                  </BarChart>
-                </ResponsiveContainer>
-              </div>
-            )}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

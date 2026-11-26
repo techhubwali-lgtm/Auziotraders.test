@@ -17,6 +17,12 @@ import {
 import { aisStreamManager } from './server/aisStreamService.ts';
 import { lookupVesselByQuery } from './server/vesselLookupService.ts';
 import { runAdminAiAssistant, type AdminAiTaskType } from './server/aiAssistant.ts';
+import {
+  getCachedCarapisListings,
+  recordAndNotifyCarapisInquiry,
+  startCarapisDailyScheduler,
+  syncCarapisDealerStock,
+} from './server/carapisService.ts';
 import type { AuctionFeedTable, SteeringType } from './src/types/portal.ts';
 
 function resolveAppDir(): string {
@@ -337,6 +343,80 @@ async function startServer() {
 
     res.setHeader('Cache-Control', 'no-store');
     res.status(result.ok ? 200 : 400).json(result);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Carapis Japanese Dealer Stock (Cached Daily — Never Calls Carapis Per Visit)
+  // ---------------------------------------------------------------------------
+  startCarapisDailyScheduler();
+
+  app.get('/api/carapis/listings', (_req, res) => {
+    const payload = getCachedCarapisListings();
+    res.setHeader('Cache-Control', 'public, max-age=120');
+    res.status(200).json(payload);
+  });
+
+  app.post('/api/carapis/sync', async (req, res) => {
+    const authHeader = req.headers.authorization || '';
+    if (!authHeader.startsWith('Bearer ') || authHeader.slice(7).trim().length < 20) {
+      res.status(401).json({
+        ok: false,
+        error: 'Authentication required to trigger a Carapis dealer stock sync.',
+      });
+      return;
+    }
+    const body = (req.body || {}) as { force?: boolean; maxPagesPerSource?: number };
+    const result = await syncCarapisDealerStock({
+      force: Boolean(body.force),
+      maxPagesPerSource:
+        typeof body.maxPagesPerSource === 'number' ? body.maxPagesPerSource : undefined,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(result.ok ? 200 : result.rateLimited ? 429 : 400).json(result);
+  });
+
+  app.post('/api/carapis/inquiry', async (req, res) => {
+    const body = (req.body || {}) as Record<string, unknown>;
+    const carId = typeof body.carId === 'string' ? body.carId.trim().slice(0, 120) : '';
+    const source = typeof body.source === 'string' ? body.source.trim().slice(0, 40) : '';
+    const make = typeof body.make === 'string' ? body.make.trim().slice(0, 80) : '';
+    const model = typeof body.model === 'string' ? body.model.trim().slice(0, 100) : '';
+    const year = Math.round(Number(body.year) || 0);
+    const priceGbp = Math.max(0, Math.round(Number(body.priceGbp) || 0));
+    const priceJpy = Math.max(0, Math.round(Number(body.priceJpy) || 0));
+    const name = typeof body.name === 'string' ? body.name.trim().slice(0, 100) : '';
+    const company = typeof body.company === 'string' ? body.company.trim().slice(0, 120) : '';
+    const email = typeof body.email === 'string' ? body.email.trim().slice(0, 120) : '';
+    const whatsapp = typeof body.whatsapp === 'string' ? body.whatsapp.trim().slice(0, 40) : '';
+    const message = typeof body.message === 'string' ? body.message.trim().slice(0, 1500) : '';
+    const trackingCode =
+      typeof body.trackingCode === 'string' ? body.trackingCode.trim().slice(0, 40) : '';
+
+    if (!carId || !make || !model || !name || !email || !email.includes('@')) {
+      res.status(400).json({
+        ok: false,
+        error: 'Valid vehicle details, name, and email address are required.',
+      });
+      return;
+    }
+
+    const result = await recordAndNotifyCarapisInquiry({
+      carId,
+      source,
+      make,
+      model,
+      year,
+      priceGbp,
+      priceJpy,
+      name,
+      company,
+      email,
+      whatsapp,
+      message,
+      trackingCode,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    res.status(200).json(result);
   });
 
   const httpServer = http.createServer(app);
